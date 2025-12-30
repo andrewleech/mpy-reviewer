@@ -1,0 +1,385 @@
+"""Command-line interface for mpy-review-rag."""
+
+import sys
+import json
+import logging
+from pathlib import Path
+from typing import Optional
+
+import click
+
+from .config import get_config, Config
+from . import __version__
+
+
+def setup_logging(verbose: bool):
+    """Configure logging based on verbosity."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
+
+@click.group()
+@click.version_option(version=__version__)
+@click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
+@click.pass_context
+def cli(ctx, verbose: bool):
+    """MicroPython Review RAG - dpgeorge-style code review assistant."""
+    ctx.ensure_object(dict)
+    ctx.obj["verbose"] = verbose
+    setup_logging(verbose)
+
+
+@cli.command()
+@click.option("--force", is_flag=True, help="Overwrite existing index")
+@click.option("--batch-size", default=100, help="Batch size for embedding")
+@click.pass_context
+def index(ctx, force: bool, batch_size: int):
+    """Build the vector index from SQLite database."""
+    from .indexer import build_index, index_stats
+
+    click.echo("Building index...")
+
+    # Show current stats
+    stats = index_stats()
+    if stats["exists"]:
+        click.echo(f"Existing index: {stats['num_records']} records")
+        if not force:
+            click.echo("Use --force to overwrite")
+            return
+
+    # Build index
+    count = build_index(batch_size=batch_size, force=force)
+    click.echo(f"Indexed {count} records")
+
+
+@cli.command()
+@click.pass_context
+def stats(ctx):
+    """Show index statistics."""
+    from .indexer import index_stats
+
+    stats = index_stats()
+
+    click.echo(f"Lance DB path: {stats['lance_path']}")
+    click.echo(f"Index exists: {stats['exists']}")
+
+    if stats["exists"]:
+        click.echo(f"Number of records: {stats['num_records']}")
+
+    if "error" in stats:
+        click.echo(f"Error: {stats['error']}")
+
+
+@cli.command()
+@click.argument("query")
+@click.option("-k", "--top-k", default=10, help="Number of results")
+@click.option("--domain", help="Filter by domain")
+@click.option("--severity", help="Filter by severity")
+@click.option("--component", help="Filter by component")
+@click.option("--style-only", is_flag=True, help="Only show style examples")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def search(
+    ctx,
+    query: str,
+    top_k: int,
+    domain: Optional[str],
+    severity: Optional[str],
+    component: Optional[str],
+    style_only: bool,
+    output_json: bool,
+):
+    """Search for similar reviews."""
+    from .retriever import get_retriever
+
+    retriever = get_retriever()
+    results = retriever.search_with_filters(
+        query,
+        domain=domain,
+        severity=severity,
+        component=component,
+        is_style_example=True if style_only else None,
+        top_k=top_k,
+    )
+
+    if output_json:
+        # Clean up results for JSON output
+        output = []
+        for r in results:
+            output.append({
+                "comment_id": r["comment_id"],
+                "comment_type": r["comment_type"],
+                "body": r["body"],
+                "domain": r.get("domain"),
+                "severity": r.get("severity"),
+                "score": r.get("rrf_score", 0),
+            })
+        click.echo(json.dumps(output, indent=2))
+    else:
+        # Human-readable output
+        for i, result in enumerate(results, 1):
+            click.echo(f"\n--- Result {i} ---")
+            click.echo(f"Domain: {result.get('domain', 'N/A')} | Severity: {result.get('severity', 'N/A')}")
+            click.echo(f"Score: {result.get('rrf_score', 0):.4f}")
+            click.echo(f"\n{result['body'][:500]}...")
+            if result.get("diff_hunk"):
+                click.echo(f"\nCode context (first 200 chars):")
+                click.echo(result["diff_hunk"][:200])
+
+
+@cli.command()
+@click.option("--pr", "pr_number", type=int, help="PR number to review")
+@click.option("--diff", "diff_file", type=click.Path(exists=True), help="Diff file to review")
+@click.option("--stdin", "use_stdin", is_flag=True, help="Read diff from stdin")
+@click.option("-k", "--top-k", default=8, help="Number of examples to retrieve")
+@click.option("--rerank", is_flag=True, help="Use cross-encoder re-ranking")
+@click.option("--codebase", is_flag=True, help="Include codebase context")
+@click.option("--output", type=click.Choice(["context", "prompt", "json"]), default="context")
+@click.pass_context
+def review(
+    ctx,
+    pr_number: Optional[int],
+    diff_file: Optional[str],
+    use_stdin: bool,
+    top_k: int,
+    rerank: bool,
+    codebase: bool,
+    output: str,
+):
+    """Generate review context for a code diff.
+
+    Retrieves relevant past dpgeorge reviews and codebase context.
+    """
+    from .retriever import get_retriever
+    from .reranker import get_reranker
+    from .codebase import get_codebase_retriever
+    from .prompt_builder import ReviewContext, get_builder
+
+    # Get diff content
+    if pr_number:
+        diff_text = _fetch_pr_diff(pr_number)
+    elif diff_file:
+        diff_text = Path(diff_file).read_text()
+    elif use_stdin:
+        diff_text = sys.stdin.read()
+    else:
+        click.echo("Error: Provide --pr, --diff, or --stdin", err=True)
+        sys.exit(1)
+
+    if not diff_text:
+        click.echo("Error: Empty diff", err=True)
+        sys.exit(1)
+
+    # Get similar reviews
+    retriever = get_retriever()
+    results = retriever.get_similar_reviews(diff_text, top_k=top_k * 2)
+
+    # Re-rank if requested
+    if rerank:
+        reranker = get_reranker()
+        results = reranker.rerank(diff_text, results, top_k=top_k)
+
+    # Get codebase context if requested
+    codebase_context = None
+    if codebase:
+        codebase_retriever = get_codebase_retriever()
+        codebase_context = codebase_retriever.get_context_for_diff(diff_text, top_k=5)
+
+    if output == "json":
+        output_data = {
+            "review_examples": [
+                {
+                    "comment_id": r["comment_id"],
+                    "body": r["body"],
+                    "diff_hunk": r.get("diff_hunk"),
+                    "domain": r.get("domain"),
+                    "severity": r.get("severity"),
+                    "score": r.get("rrf_score", r.get("rerank_score", 0)),
+                }
+                for r in results[:top_k]
+            ],
+            "codebase_context": codebase_context,
+            "query_length": len(diff_text),
+        }
+        click.echo(json.dumps(output_data, indent=2))
+
+    elif output == "prompt":
+        # Build full prompt with all components
+        context = ReviewContext(
+            diff_text=diff_text,
+            review_examples=results[:top_k],
+            codebase_context=codebase_context,
+            pr_number=pr_number,
+        )
+        builder = get_builder()
+        prompt = builder.build_review_prompt(context)
+        click.echo(prompt)
+
+    else:  # context
+        click.echo("# Relevant Past Reviews by dpgeorge\n")
+        for i, result in enumerate(results[:top_k], 1):
+            click.echo(f"## Example {i}: {result.get('domain', 'N/A')} - {result.get('severity', 'N/A')}")
+            if result.get("diff_hunk"):
+                click.echo("```diff")
+                click.echo(result["diff_hunk"][:1000])
+                click.echo("```")
+            click.echo(f"\ndpgeorge's comment:\n> {result['body']}\n")
+            click.echo("---\n")
+
+
+def _fetch_pr_diff(pr_number: int) -> str:
+    """Fetch diff for a PR from GitHub."""
+    import subprocess
+
+    result = subprocess.run(
+        ["gh", "pr", "diff", str(pr_number), "--repo", "micropython/micropython"],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        click.echo(f"Error fetching PR diff: {result.stderr}", err=True)
+        sys.exit(1)
+
+    return result.stdout
+
+
+def _build_prompt(diff_text: str, results: list) -> str:
+    """Build a full prompt for Claude."""
+    prompt = """# dpgeorge Review Style Guide
+
+When reviewing MicroPython code, dpgeorge focuses on:
+- Correctness: Logic bugs, edge cases, proper error handling
+- Code style: Consistent formatting, naming conventions
+- Memory efficiency: Embedded systems constraints
+- API design: Clean interfaces, backwards compatibility
+
+# Relevant Past Reviews by dpgeorge
+
+"""
+
+    for i, result in enumerate(results, 1):
+        prompt += f"## Example {i}: {result.get('domain', 'N/A')} - {result.get('severity', 'N/A')}\n"
+        if result.get("diff_hunk"):
+            prompt += "```diff\n"
+            prompt += result["diff_hunk"][:1500]
+            prompt += "\n```\n"
+        prompt += f"\ndpgeorge's comment:\n> {result['body']}\n\n---\n\n"
+
+    prompt += """# Code to Review
+
+```diff
+"""
+    prompt += diff_text[:10000]  # Limit diff size
+    prompt += """
+```
+
+# Your Task
+
+Review this code in dpgeorge's style. Consider:
+- Correctness (logic bugs, edge cases)
+- Code style (MicroPython conventions)
+- Memory efficiency (embedded constraints)
+- API design (if public interfaces affected)
+
+Provide feedback with appropriate severity levels (blocking/suggestion/nitpick).
+"""
+
+    return prompt
+
+
+@cli.group()
+def eval():
+    """Evaluation commands."""
+    pass
+
+
+@eval.command("build-dataset")
+@click.option("--output", default="eval/dataset.json", help="Output file")
+@click.option("--count", default=100, help="Number of PRs to sample")
+@click.option("--stratify", type=click.Choice(["domain", "severity", "component"]),
+              help="Stratify by field")
+def eval_build_dataset(output: str, count: int, stratify: str):
+    """Build evaluation dataset from real PRs."""
+    from .evaluator import DatasetBuilder
+    from .config import get_config
+
+    config = get_config()
+    builder = DatasetBuilder(str(config.sqlite_db_path))
+
+    click.echo(f"Building evaluation dataset with {count} samples...")
+    dataset = builder.build_dataset(
+        sample_size=count,
+        stratify_by=stratify,
+        output_path=Path(output),
+    )
+
+    click.echo(f"Built dataset with {len(dataset)} samples")
+    click.echo(f"Saved to {output}")
+
+
+@eval.command("retrieval")
+@click.option("--dataset", required=True, help="Dataset JSON file")
+@click.option("--output", default="eval/results", help="Output directory")
+@click.option("--rerank", is_flag=True, help="Use re-ranking")
+@click.option("--sample-limit", default=None, type=int, help="Limit samples for quick eval")
+def eval_retrieval(dataset: str, output: str, rerank: bool, sample_limit: int):
+    """Evaluate retrieval quality on a dataset."""
+    from .evaluator import EvaluationPipeline
+    from .retriever import get_retriever
+    from .config import get_config
+
+    config = get_config()
+
+    click.echo("Loading evaluation dataset...")
+    with open(dataset) as f:
+        samples_data = json.load(f)
+
+    if sample_limit:
+        samples_data = samples_data[:sample_limit]
+
+    click.echo(f"Evaluating on {len(samples_data)} samples...")
+
+    retriever = get_retriever()
+    pipeline = EvaluationPipeline(str(config.sqlite_db_path))
+
+    results = pipeline.run_evaluation(
+        retriever,
+        sample_size=len(samples_data),
+        output_dir=Path(output),
+    )
+
+    # Print summary
+    click.echo("\n=== Evaluation Results ===\n")
+    for metric, value in results["summary"].items():
+        click.echo(f"{metric}: {value:.4f}")
+
+
+@eval.command("metrics")
+@click.option("--results-dir", required=True, help="Results directory")
+def eval_metrics(results_dir: str):
+    """Display evaluation metrics from results."""
+    results_path = Path(results_dir) / "summary.json"
+
+    if not results_path.exists():
+        click.echo(f"Results file not found: {results_path}", err=True)
+        sys.exit(1)
+
+    with open(results_path) as f:
+        metrics = json.load(f)
+
+    click.echo("\n=== Evaluation Metrics ===\n")
+    for metric, value in sorted(metrics.items()):
+        click.echo(f"{metric:20s}: {value:.4f}")
+
+
+def main():
+    """Entry point for the CLI."""
+    cli()
+
+
+if __name__ == "__main__":
+    main()
