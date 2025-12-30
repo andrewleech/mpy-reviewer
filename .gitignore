@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Package distribution and build
+mpy_review_rag.egg-info/
+build/
+dist/
+*.egg-info/
+
+# Logs and temporary files
+*.log
+logs/
+
+# Generated output
+output/
+
+# Unused directories
+eval/
+tests/
+
+# Editor
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
