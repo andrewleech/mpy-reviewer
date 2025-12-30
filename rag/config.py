@@ -1,0 +1,68 @@
+"""Configuration management for mpy-review-rag."""
+
+from pathlib import Path
+from dataclasses import dataclass, field
+import os
+
+
+@dataclass
+class Config:
+    """Configuration for the RAG system."""
+
+    # Paths
+    project_root: Path = field(default_factory=lambda: Path(__file__).parent.parent)
+    sqlite_db_path: Path = field(default=None)
+    lance_db_path: Path = field(default=None)
+    micropython_repo_path: Path = field(default=None)
+
+    # Embedding model
+    embedding_model: str = "jinaai/jina-embeddings-v2-base-code"
+    embedding_dim: int = 768
+    max_seq_length: int = 8192  # Jina v2 supports 8K tokens
+
+    # Device
+    device: str = field(default=None)
+
+    # Retrieval settings
+    top_k_initial: int = 100  # Initial retrieval count
+    top_k_rerank: int = 30  # After metadata filtering
+    top_k_final: int = 8  # Final examples to return
+
+    # Re-ranker model
+    reranker_model: str = "BAAI/bge-reranker-large"
+
+    # Batch sizes
+    embedding_batch_size: int = 32
+    index_batch_size: int = 100
+
+    def __post_init__(self):
+        # Set default paths relative to project root
+        if self.sqlite_db_path is None:
+            self.sqlite_db_path = self.project_root / "data" / "dpgeorge_reviews.db"
+        if self.lance_db_path is None:
+            self.lance_db_path = self.project_root / "data" / "lance"
+        if self.micropython_repo_path is None:
+            self.micropython_repo_path = Path("/home/corona/mpy/review")
+
+        # Auto-detect device
+        if self.device is None:
+            import torch
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+# Global config instance
+_config: Config | None = None
+
+
+def get_config() -> Config:
+    """Get the global configuration instance."""
+    global _config
+    if _config is None:
+        _config = Config()
+    return _config
+
+
+def set_config(config: Config) -> None:
+    """Set the global configuration instance."""
+    global _config
+    _config = config
