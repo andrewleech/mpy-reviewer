@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mpy-review-rag"
+version = "0.1.0"
+description = "MicroPython Review RAG - dpgeorge-style code review assistant"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "MicroPython Review Tools"}
+]
+
+dependencies = [
+    "lancedb>=0.4.0",
+    "transformers>=4.36.0",
+    "torch>=2.0.0",
+    "click>=8.0.0",
+    "tqdm>=4.65.0",
+    "numpy>=1.24.0",
+    "pyarrow>=14.0.0",
+]
+
+[project.optional-dependencies]
+reranking = [
+    "sentence-transformers>=2.2.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov",
+]
+
+[project.scripts]
+mpy-review-rag = "rag.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rag*"]
