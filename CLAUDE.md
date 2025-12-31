@@ -19,6 +19,7 @@ This project creates a queryable RAG (Retrieval-Augmented Generation) system of 
 - ✅ Vector index built (LanceDB with 768-dim Jina embeddings)
 - ✅ Semantic search validated and working
 - ✅ CLI tools operational
+- ✅ Claude Code skill available
 
 ## Directory Structure
 
@@ -43,8 +44,11 @@ dpgeorge-review-db/
 ├── scripts/
 │   ├── collect.py                 # Collect reviews from GitHub
 │   ├── categorize_headless.py     # Batch categorize with Claude CLI
+│   ├── build_index_resume.py      # Resume-capable index builder
 │   ├── migrate_schema.py          # Database schema migrations
 │   └── ...                        # Other utility scripts
+├── skill/
+│   └── SKILL.md                   # Claude Code skill configuration
 ├── docs/                          # Documentation and notes
 ├── logs/                          # Script logs
 ├── venv/                          # Python virtual environment
@@ -93,6 +97,52 @@ mpy-review-rag review --diff path/to/changes.diff
 # Output as JSON for programmatic use
 mpy-review-rag search "type checking" --json
 ```
+
+### Using as a Claude Code Skill
+
+The system can be installed as a Claude Code skill for convenient access within Claude Code sessions.
+
+**Installation:**
+
+```bash
+# Create skill directory
+mkdir -p ~/.claude/skills/dpgeorge-review
+
+# Link the SKILL.md file
+ln -s /home/anl/mpy/dpgeorge-review-db/skill/SKILL.md \
+      ~/.claude/skills/dpgeorge-review/SKILL.md
+```
+
+**Usage:**
+
+Once installed, invoke the skill with `/dpgeorge-review` in Claude Code:
+
+```bash
+# Generate review context for a diff
+/dpgeorge-review review --diff path/to/changes.patch
+
+# With codebase context and re-ranking
+/dpgeorge-review review --diff changes.patch --codebase --rerank --output prompt
+
+# Search for patterns
+/dpgeorge-review search "memory allocation" --domain memory -k 10
+
+# Get statistics
+/dpgeorge-review stats
+```
+
+**Features:**
+- Full access to all CLI commands through `/dpgeorge-review`
+- Semantic search across 18,614 categorized review comments
+- Review context generation for PRs and diffs
+- Filter by domain, severity, component, language context
+- Multiple output formats (context, prompt, JSON)
+
+**Documentation:** See `skill/SKILL.md` for complete skill reference including:
+- All available commands and options
+- Filter categories and output formats
+- Performance tips and troubleshooting
+- Common workflows and examples
 
 ### Python API
 
