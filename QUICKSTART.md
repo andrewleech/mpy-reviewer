@@ -94,10 +94,10 @@ mpy-review-rag review --diff sample.patch --output json | jq '.review_examples[0
 
 ### As a Skill
 
-The system is automatically available as `/dpgeorge-review`:
+After installing the skill (see "Claude Code Skill Setup" below), you can use:
 
-```
-/dpgeorge-review --diff my_changes.patch --codebase --rerank --output prompt
+```bash
+/dpgeorge-review review --diff my_changes.patch --codebase --rerank --output prompt
 ```
 
 ### As Python Module
@@ -293,15 +293,51 @@ mpy-review-rag eval --help
 python3 -c "import rag; print(rag.__version__)"
 ```
 
-## Claude Code Skill
+## Claude Code Skill Setup
 
-Once set up, use the `/dpgeorge-review` skill in Claude Code:
+To use this as a Claude Code skill:
 
+### 1. Install the Skill
+
+```bash
+# Create skill directory
+mkdir -p ~/.claude/skills/dpgeorge-review
+
+# Link the SKILL.md file
+ln -s /home/anl/mpy/dpgeorge-review-db/skill/SKILL.md \
+      ~/.claude/skills/dpgeorge-review/SKILL.md
 ```
-/dpgeorge-review --diff changes.patch --codebase --rerank --output prompt
+
+### 2. Verify Installation
+
+The skill should now be available in Claude Code. You can invoke it with:
+
+```bash
+/dpgeorge-review review --diff changes.patch
 ```
 
-This runs directly without needing to activate venv or navigate directories.
+**Note:** The skill requires the virtual environment and index to be set up first (steps above).
+
+### 3. Usage Examples
+
+```bash
+# Basic review
+/dpgeorge-review review --diff changes.patch
+
+# With codebase context
+/dpgeorge-review review --diff changes.patch --codebase
+
+# Full prompt for AI review
+/dpgeorge-review review --diff changes.patch --codebase --rerank --output prompt
+
+# Search for patterns
+/dpgeorge-review search "memory allocation" --domain memory
+
+# Get statistics
+/dpgeorge-review stats
+```
+
+See `skill/SKILL.md` for complete skill documentation.
 
 ---
 

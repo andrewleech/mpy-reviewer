@@ -287,14 +287,23 @@ class Config:
 
 ## Integration with Claude
 
-### As a Skill
+### As a Claude Code Skill
 
-The system is registered as a Claude Code skill at `~/.claude/skills/dpgeorge-review.md`.
+To use as a Claude Code skill:
 
-Usage:
-```bash
-/dpgeorge-review --diff changes.patch --codebase --rerank --output prompt
-```
+1. **Install the skill:**
+   ```bash
+   mkdir -p ~/.claude/skills/dpgeorge-review
+   ln -s /home/anl/mpy/dpgeorge-review-db/skill/SKILL.md \
+         ~/.claude/skills/dpgeorge-review/SKILL.md
+   ```
+
+2. **Use in Claude Code:**
+   ```bash
+   /dpgeorge-review review --diff changes.patch --codebase --rerank --output prompt
+   ```
+
+See `skill/SKILL.md` for complete skill documentation.
 
 ### As Python Module
 
@@ -467,7 +476,6 @@ for r in results:
 2. Continuous learning from new reviews
 3. Web interface for browsing patterns
 4. GitHub Actions integration
-5. Skill-to-Claude integration for inline reviews
 
 ### Potential Improvements
 1. Fine-tune Jina embeddings on dpgeorge reviews
