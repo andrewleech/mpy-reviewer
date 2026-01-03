@@ -13,9 +13,11 @@ transformers>=4.36.0
 click>=8.0.0
 tqdm>=4.65.0
 
-# Re-ranking (optional, can use cross-encoders)
-sentence-transformers>=2.2.0
-
 # For handling embeddings
 numpy>=1.24.0
 pyarrow>=14.0.0
+
+# Optional dependencies (install with pip install 'mpy-review-rag[<feature>]'):
+# - Re-ranking: sentence-transformers>=2.2.0
+# - Codebase context: codanna-cli>=0.1.0
+# - All optional features: pip install 'mpy-review-rag[all]'

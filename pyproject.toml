@@ -27,9 +27,16 @@ dependencies = [
 reranking = [
     "sentence-transformers>=2.2.0",
 ]
+codebase = [
+    "codanna-cli>=0.1.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov",
+]
+all = [
+    "sentence-transformers>=2.2.0",
+    "codanna-cli>=0.1.0",
 ]
 
 [project.scripts]
