@@ -25,17 +25,44 @@ class CodebaseRetriever:
         self._file_cache: Dict[str, str] = {}
 
     def _check_codanna(self) -> bool:
-        """Check if codanna is available and index exists."""
+        """Check if codanna is available and index exists.
+
+        Raises:
+            RuntimeError: If codanna is not available (hard requirement)
+        """
         try:
             # Try to import codanna
             import codanna
             logger.info("Codanna is available")
             return True
         except ImportError:
-            logger.debug(
-                "codanna not available. Codebase context retrieval will use fallback patterns."
+            error_msg = (
+                "\n"
+                "╔══════════════════════════════════════════════════════════════════════╗\n"
+                "║ CRITICAL: codanna is required for codebase context retrieval         ║\n"
+                "╠══════════════════════════════════════════════════════════════════════╣\n"
+                "║                                                                      ║\n"
+                "║ This tool requires codanna for semantic code search and analysis.   ║\n"
+                "║                                                                      ║\n"
+                "║ Installation:                                                        ║\n"
+                "║   1. Install Rust if not installed:                                 ║\n"
+                "║      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh ║\n"
+                "║                                                                      ║\n"
+                "║   2. Install codanna:                                                ║\n"
+                "║      cargo install codanna --all-features                            ║\n"
+                "║                                                                      ║\n"
+                "║   3. Ensure ~/.cargo/bin is in PATH                                  ║\n"
+                "║                                                                      ║\n"
+                "║ For automatic installation via Claude Code SessionStart hook,       ║\n"
+                "║ see: docs/CLAUDE_SETUP.md                                            ║\n"
+                "║                                                                      ║\n"
+                "╚══════════════════════════════════════════════════════════════════════╝\n"
             )
-            return False
+            logger.error(error_msg)
+            raise RuntimeError(
+                "codanna is required but not installed. "
+                "Install with: cargo install codanna --all-features"
+            )
 
     def extract_identifiers(self, code_text: str) -> Set[str]:
         """Extract potential identifiers (function names, macros, types) from code.

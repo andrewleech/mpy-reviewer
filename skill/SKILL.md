@@ -25,6 +25,21 @@ Invoke this skill when the user:
 
 When the user asks for review help, invoke this skill proactively.
 
+## Requirements
+
+This skill requires **codanna** for semantic code search and codebase analysis.
+
+**Automatic setup:** A SessionStart hook (`.claude/hooks/ensure-codanna.sh`) automatically installs codanna via cargo on first use.
+
+**Manual installation:**
+```bash
+cargo install codanna --all-features
+```
+
+If codanna is not installed, the tool will fail with a prominent error message directing the user to install it.
+
+See `docs/CLAUDE_SETUP.md` for detailed setup instructions.
+
 ## Tool Location
 
 The underlying CLI tool is located at:

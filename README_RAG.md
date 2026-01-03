@@ -12,6 +12,17 @@ This system enables AI models (like Claude) to generate high-quality code review
 
 ## Quick Start
 
+### Prerequisites
+
+- Python 3.10+
+- Rust/cargo (for codanna)
+
+```bash
+# Install Rust if not installed
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+```
+
 ### Installation
 
 ```bash
@@ -22,10 +33,15 @@ cd /home/corona/mpy/dpgeorge-review-db
 python3 -m venv venv
 source venv/bin/activate
 
-# Install dependencies (includes reranking and codebase context for best quality)
+# Install Python dependencies (includes sentence-transformers for reranking)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 pip install -e .
+
+# Install codanna for semantic code search (REQUIRED)
+cargo install codanna --all-features
 ```
+
+**Note:** Claude Code skill users get automatic codanna installation via SessionStart hook. See Integration section below.
 
 ### Build Vector Index
 

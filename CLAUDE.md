@@ -63,6 +63,18 @@ dpgeorge-review-db/
 
 ## Quick Start
 
+### Prerequisites
+
+This tool requires:
+- **Python 3.10+** for the RAG system
+- **Rust/cargo** for codanna (semantic code search)
+
+Install Rust if not already installed:
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+```
+
 ### Setup Environment
 
 ```bash
@@ -72,12 +84,17 @@ cd /home/anl/mpy/dpgeorge-review-db
 python3 -m venv venv
 source venv/bin/activate
 
-# Install all dependencies (includes reranking and codebase context)
+# Install Python dependencies (includes sentence-transformers for reranking)
 pip install -e .
 
 # For CPU-only PyTorch (recommended for WSL2/systems without CUDA):
 pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# Install codanna for semantic code search (REQUIRED)
+cargo install codanna --all-features
 ```
+
+**Claude Code users:** If using as a skill, the SessionStart hook automatically installs codanna. See `docs/CLAUDE_SETUP.md`.
 
 ### Using the CLI
 

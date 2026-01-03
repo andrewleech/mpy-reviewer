@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/ensure-codanna.sh",
+            "description": "Ensure codanna is installed for codebase analysis"
+          }
+        ]
+      }
+    ]
+  }
+}
