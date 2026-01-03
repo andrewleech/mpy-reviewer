@@ -298,15 +298,21 @@ To use as a Claude Code skill with natural language interface:
          ~/.claude/skills/mpy-review/SKILL.md
    ```
 
-2. **Use in Claude Code with natural language:**
-   ```bash
-   /mpy-review the current branch
-   /mpy-review commit ca65d543
-   /mpy-review my changes to py/gc.c
-   /mpy-review find examples of memory allocation
+2. **Ask Claude to review your code:**
+   ```
+   Can you review my current branch?
+   Can you /mpy-review the current branch?
+
+   Can you review commit ca65d543?
+
+   Can you review my changes to py/gc.c?
+
+   Can you find examples of memory allocation?
    ```
 
-The agent interprets your request and automatically runs the appropriate git/search commands.
+**Note:** Skills are invoked BY Claude, not directly by users. You ask Claude to use the skill.
+
+Claude interprets your request and automatically runs the appropriate git/search commands.
 
 See `skill/SKILL.md` for the agent's complete instructions.
 

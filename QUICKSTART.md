@@ -94,13 +94,18 @@ mpy-review-rag review --diff sample.patch --output json | jq '.review_examples[0
 
 ### As a Skill
 
-After installing the skill (see "Claude Code Skill Setup" below), you can use natural language:
+After installing the skill (see "Claude Code Skill Setup" below), ask Claude to review your code:
 
-```bash
-/mpy-review the current branch
-/mpy-review commit ca65d543
-/mpy-review my changes to py/gc.c
 ```
+Can you review my current branch?
+Can you /mpy-review the current branch?
+
+Can you review commit ca65d543?
+
+Can you review my changes to py/gc.c?
+```
+
+**Note:** You ask Claude to use the skill - you don't invoke `/mpy-review` directly.
 
 ### As Python Module
 
@@ -312,36 +317,37 @@ ln -s /home/anl/mpy/dpgeorge-review-db/skill/SKILL.md \
 
 ### 2. Verify Installation
 
-The skill should now be available in Claude Code. Test it with:
+The skill should now be available in Claude Code. Test it by asking Claude:
 
-```bash
-/mpy-review stats
 ```
+Can you /mpy-review stats
+```
+
+This should show the index status (18,614 records).
 
 **Note:** The skill requires the virtual environment and index to be set up first (steps above).
 
-### 3. Usage Examples (Natural Language)
+### 3. Usage Examples
 
-```bash
+Ask Claude to review your code using natural language:
+
+```
 # Review your current work
-/mpy-review the current branch
-/mpy-review my uncommitted changes
+Can you review my current branch?
+Can you /mpy-review my uncommitted changes?
 
 # Review specific commit
-/mpy-review commit ca65d543
+Can you review commit ca65d543?
 
 # Review specific files
-/mpy-review my changes to py/gc.c
+Can you review my changes to py/gc.c?
 
 # Find review examples
-/mpy-review find examples of memory allocation reviews
-/mpy-review what has dpgeorge said about error handling
-
-# Get statistics
-/mpy-review stats
+Can you find examples of memory allocation reviews?
+What has dpgeorge said about error handling?
 ```
 
-The agent interprets your natural language request and runs the appropriate commands automatically.
+Claude interprets your request, runs the appropriate git/search commands, and provides review feedback.
 
 See `skill/SKILL.md` for the agent's complete instructions.
 

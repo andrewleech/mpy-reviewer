@@ -18,6 +18,13 @@ Invoke this skill when the user:
 - Needs review context for MicroPython code
 - Mentions reviewing, feedback, or code quality for MicroPython
 
+**Important:** Users cannot invoke skills directly. They must ask you to use the skill:
+- ✅ User: "Can you review my current branch?"
+- ✅ User: "Can you /mpy-review the current branch?"
+- ❌ User: "/mpy-review the current branch" (this will fail)
+
+When the user asks for review help, invoke this skill proactively.
+
 ## Tool Location
 
 The underlying CLI tool is located at:

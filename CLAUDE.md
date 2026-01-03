@@ -115,24 +115,29 @@ ln -s /home/anl/mpy/dpgeorge-review-db/skill/SKILL.md \
 
 **Usage:**
 
-Once installed, use natural language with `/mpy-review`:
+Once installed, ask Claude to review your code using natural language:
 
-```bash
+```
 # Review your current changes
-/mpy-review the current branch
+Can you review my current branch?
+Can you /mpy-review the current branch?
 
 # Review specific commit
-/mpy-review commit ca65d543
+Can you review commit ca65d543?
+Can you /mpy-review commit ca65d543?
 
 # Review specific files
-/mpy-review my changes to py/gc.c
+Can you review my changes to py/gc.c?
 
 # Find review examples
-/mpy-review find examples of memory allocation reviews
+Can you find examples of memory allocation reviews?
+Can you /mpy-review find examples of memory allocation?
 
 # Get quick context
-/mpy-review what has dpgeorge said about error handling
+What has dpgeorge said about error handling?
 ```
+
+**Note:** Skills are invoked BY Claude, not directly by users. You ask Claude to use the skill, and Claude runs the appropriate commands.
 
 **Features:**
 - Natural language interface (no CLI arguments needed)
