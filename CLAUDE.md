@@ -408,6 +408,13 @@ if batch_texts:
     processed += len(batch_records)
 
 logger.info(f"=== COMPLETE: {len(indexed_keys) + processed} total records indexed ===")
+
+# Create full-text search index (required for hybrid retrieval)
+if table is not None:
+    logger.info("Creating full-text search index on 'body' column...")
+    table.create_fts_index("body", replace=True)
+    logger.info("✓ Full-text search index created successfully")
+
 conn.close()
 ```
 
@@ -572,6 +579,24 @@ python -c "import lancedb; db = lancedb.connect('data/lance'); print(db.table_na
 # Build or rebuild the index
 python scripts/build_index_resume.py
 ```
+
+### Full-Text Search Error
+
+If you get an error like:
+```
+RuntimeError: lance error: Invalid user input: Cannot perform full text search unless an INVERTED index has been created
+```
+
+The LanceDB table is missing the full-text search (FTS) index. This happens if the index was built before FTS indexing was added. Fix it with:
+
+```bash
+source venv/bin/activate
+python scripts/add_fts_index.py
+```
+
+This adds the FTS index to the existing table without rebuilding embeddings (takes ~5 seconds).
+
+**Note:** `scripts/build_index_resume.py` and `mpy-review-rag index` now automatically create the FTS index, so this should only be needed for indices built with older versions.
 
 ### Claude CLI Categorization Errors
 

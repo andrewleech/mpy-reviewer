@@ -159,6 +159,15 @@ def build_index_with_resume(
     total_indexed = len(indexed_keys) + processed
     logger.info(f"=== COMPLETE: {total_indexed} total records indexed ===")
 
+    # Create full-text search index
+    if table is not None:
+        logger.info("Creating full-text search index on 'body' column...")
+        try:
+            table.create_fts_index("body", replace=True)
+            logger.info("✓ Full-text search index created successfully")
+        except Exception as e:
+            logger.warning(f"Failed to create FTS index (non-fatal): {e}")
+
     return total_indexed
 
 
