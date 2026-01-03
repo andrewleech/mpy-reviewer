@@ -9,6 +9,7 @@ from typing import Optional
 import click
 
 from .config import get_config, Config
+from .usage_logger import get_logger
 from . import __version__
 
 
@@ -40,19 +41,27 @@ def index(ctx, force: bool, batch_size: int):
     """Build the vector index from SQLite database."""
     from .indexer import build_index, index_stats
 
-    click.echo("Building index...")
+    logger = get_logger()
 
-    # Show current stats
-    stats = index_stats()
-    if stats["exists"]:
-        click.echo(f"Existing index: {stats['num_records']} records")
-        if not force:
-            click.echo("Use --force to overwrite")
-            return
+    with logger.track_operation(
+        "index",
+        force=force,
+        batch_size=batch_size,
+    ) as log_ctx:
+        click.echo("Building index...")
 
-    # Build index
-    count = build_index(batch_size=batch_size, force=force)
-    click.echo(f"Indexed {count} records")
+        # Show current stats
+        stats = index_stats()
+        if stats["exists"]:
+            click.echo(f"Existing index: {stats['num_records']} records")
+            if not force:
+                click.echo("Use --force to overwrite")
+                return
+
+        # Build index
+        count = build_index(batch_size=batch_size, force=force)
+        log_ctx.set_result_count(count)
+        click.echo(f"Indexed {count} records")
 
 
 @cli.command()
@@ -95,15 +104,27 @@ def search(
     """Search for similar reviews."""
     from .retriever import get_retriever
 
-    retriever = get_retriever()
-    results = retriever.search_with_filters(
-        query,
+    logger = get_logger()
+
+    with logger.track_operation(
+        "search",
+        query=query,
         domain=domain,
         severity=severity,
         component=component,
-        is_style_example=True if style_only else None,
+        style_only=style_only,
         top_k=top_k,
-    )
+    ) as log_ctx:
+        retriever = get_retriever()
+        results = retriever.search_with_filters(
+            query,
+            domain=domain,
+            severity=severity,
+            component=component,
+            is_style_example=True if style_only else None,
+            top_k=top_k,
+        )
+        log_ctx.set_result_count(len(results))
 
     if output_json:
         # Clean up results for JSON output
@@ -158,76 +179,90 @@ def review(
     from .codebase import get_codebase_retriever
     from .prompt_builder import ReviewContext, get_builder
 
-    # Get diff content
-    if pr_number:
-        diff_text = _fetch_pr_diff(pr_number)
-    elif diff_file:
-        diff_text = Path(diff_file).read_text()
-    elif use_stdin:
-        diff_text = sys.stdin.read()
-    else:
-        click.echo("Error: Provide --pr, --diff, or --stdin", err=True)
-        sys.exit(1)
+    logger = get_logger()
 
-    if not diff_text:
-        click.echo("Error: Empty diff", err=True)
-        sys.exit(1)
+    with logger.track_operation(
+        "review",
+        pr_number=pr_number,
+        diff_file=diff_file,
+        use_stdin=use_stdin,
+        top_k=top_k,
+        rerank=rerank,
+        codebase=codebase,
+        output=output,
+    ) as log_ctx:
+        # Get diff content
+        if pr_number:
+            diff_text = _fetch_pr_diff(pr_number)
+        elif diff_file:
+            diff_text = Path(diff_file).read_text()
+        elif use_stdin:
+            diff_text = sys.stdin.read()
+        else:
+            click.echo("Error: Provide --pr, --diff, or --stdin", err=True)
+            sys.exit(1)
 
-    # Get similar reviews
-    retriever = get_retriever()
-    results = retriever.get_similar_reviews(diff_text, top_k=top_k * 2)
+        if not diff_text:
+            click.echo("Error: Empty diff", err=True)
+            sys.exit(1)
 
-    # Re-rank if requested
-    if rerank:
-        reranker = get_reranker()
-        results = reranker.rerank(diff_text, results, top_k=top_k)
+        # Get similar reviews
+        retriever = get_retriever()
+        results = retriever.get_similar_reviews(diff_text, top_k=top_k * 2)
 
-    # Get codebase context if requested
-    codebase_context = None
-    if codebase:
-        codebase_retriever = get_codebase_retriever()
-        codebase_context = codebase_retriever.get_context_for_diff(diff_text, top_k=5)
+        # Re-rank if requested
+        if rerank:
+            reranker = get_reranker()
+            results = reranker.rerank(diff_text, results, top_k=top_k)
 
-    if output == "json":
-        output_data = {
-            "review_examples": [
-                {
-                    "comment_id": r["comment_id"],
-                    "body": r["body"],
-                    "diff_hunk": r.get("diff_hunk"),
-                    "domain": r.get("domain"),
-                    "severity": r.get("severity"),
-                    "score": r.get("rrf_score", r.get("rerank_score", 0)),
-                }
-                for r in results[:top_k]
-            ],
-            "codebase_context": codebase_context,
-            "query_length": len(diff_text),
-        }
-        click.echo(json.dumps(output_data, indent=2))
+        # Get codebase context if requested
+        codebase_context = None
+        if codebase:
+            codebase_retriever = get_codebase_retriever()
+            codebase_context = codebase_retriever.get_context_for_diff(diff_text, top_k=5)
 
-    elif output == "prompt":
-        # Build full prompt with all components
-        context = ReviewContext(
-            diff_text=diff_text,
-            review_examples=results[:top_k],
-            codebase_context=codebase_context,
-            pr_number=pr_number,
-        )
-        builder = get_builder()
-        prompt = builder.build_review_prompt(context)
-        click.echo(prompt)
+        log_ctx.set_result_count(len(results[:top_k]))
 
-    else:  # context
-        click.echo("# Relevant Past Reviews by dpgeorge\n")
-        for i, result in enumerate(results[:top_k], 1):
-            click.echo(f"## Example {i}: {result.get('domain', 'N/A')} - {result.get('severity', 'N/A')}")
-            if result.get("diff_hunk"):
-                click.echo("```diff")
-                click.echo(result["diff_hunk"][:1000])
-                click.echo("```")
-            click.echo(f"\ndpgeorge's comment:\n> {result['body']}\n")
-            click.echo("---\n")
+        if output == "json":
+            output_data = {
+                "review_examples": [
+                    {
+                        "comment_id": r["comment_id"],
+                        "body": r["body"],
+                        "diff_hunk": r.get("diff_hunk"),
+                        "domain": r.get("domain"),
+                        "severity": r.get("severity"),
+                        "score": r.get("rrf_score", r.get("rerank_score", 0)),
+                    }
+                    for r in results[:top_k]
+                ],
+                "codebase_context": codebase_context,
+                "query_length": len(diff_text),
+            }
+            click.echo(json.dumps(output_data, indent=2))
+
+        elif output == "prompt":
+            # Build full prompt with all components
+            context = ReviewContext(
+                diff_text=diff_text,
+                review_examples=results[:top_k],
+                codebase_context=codebase_context,
+                pr_number=pr_number,
+            )
+            builder = get_builder()
+            prompt = builder.build_review_prompt(context)
+            click.echo(prompt)
+
+        else:  # context
+            click.echo("# Relevant Past Reviews by dpgeorge\n")
+            for i, result in enumerate(results[:top_k], 1):
+                click.echo(f"## Example {i}: {result.get('domain', 'N/A')} - {result.get('severity', 'N/A')}")
+                if result.get("diff_hunk"):
+                    click.echo("```diff")
+                    click.echo(result["diff_hunk"][:1000])
+                    click.echo("```")
+                click.echo(f"\ndpgeorge's comment:\n> {result['body']}\n")
+                click.echo("---\n")
 
 
 def _fetch_pr_diff(pr_number: int) -> str:
@@ -307,18 +342,27 @@ def eval_build_dataset(output: str, count: int, stratify: str):
     from .evaluator import DatasetBuilder
     from .config import get_config
 
-    config = get_config()
-    builder = DatasetBuilder(str(config.sqlite_db_path))
+    logger = get_logger()
 
-    click.echo(f"Building evaluation dataset with {count} samples...")
-    dataset = builder.build_dataset(
-        sample_size=count,
-        stratify_by=stratify,
-        output_path=Path(output),
-    )
+    with logger.track_operation(
+        "eval_build_dataset",
+        output=output,
+        count=count,
+        stratify=stratify,
+    ) as log_ctx:
+        config = get_config()
+        builder = DatasetBuilder(str(config.sqlite_db_path))
 
-    click.echo(f"Built dataset with {len(dataset)} samples")
-    click.echo(f"Saved to {output}")
+        click.echo(f"Building evaluation dataset with {count} samples...")
+        dataset = builder.build_dataset(
+            sample_size=count,
+            stratify_by=stratify,
+            output_path=Path(output),
+        )
+
+        log_ctx.set_result_count(len(dataset))
+        click.echo(f"Built dataset with {len(dataset)} samples")
+        click.echo(f"Saved to {output}")
 
 
 @eval.command("retrieval")
@@ -332,30 +376,41 @@ def eval_retrieval(dataset: str, output: str, rerank: bool, sample_limit: int):
     from .retriever import get_retriever
     from .config import get_config
 
-    config = get_config()
+    logger = get_logger()
 
-    click.echo("Loading evaluation dataset...")
-    with open(dataset) as f:
-        samples_data = json.load(f)
+    with logger.track_operation(
+        "eval_retrieval",
+        dataset=dataset,
+        output=output,
+        rerank=rerank,
+        sample_limit=sample_limit,
+    ) as log_ctx:
+        config = get_config()
 
-    if sample_limit:
-        samples_data = samples_data[:sample_limit]
+        click.echo("Loading evaluation dataset...")
+        with open(dataset) as f:
+            samples_data = json.load(f)
 
-    click.echo(f"Evaluating on {len(samples_data)} samples...")
+        if sample_limit:
+            samples_data = samples_data[:sample_limit]
 
-    retriever = get_retriever()
-    pipeline = EvaluationPipeline(str(config.sqlite_db_path))
+        click.echo(f"Evaluating on {len(samples_data)} samples...")
 
-    results = pipeline.run_evaluation(
-        retriever,
-        sample_size=len(samples_data),
-        output_dir=Path(output),
-    )
+        retriever = get_retriever()
+        pipeline = EvaluationPipeline(str(config.sqlite_db_path))
 
-    # Print summary
-    click.echo("\n=== Evaluation Results ===\n")
-    for metric, value in results["summary"].items():
-        click.echo(f"{metric}: {value:.4f}")
+        results = pipeline.run_evaluation(
+            retriever,
+            sample_size=len(samples_data),
+            output_dir=Path(output),
+        )
+
+        log_ctx.set_result_count(len(samples_data))
+
+        # Print summary
+        click.echo("\n=== Evaluation Results ===\n")
+        for metric, value in results["summary"].items():
+            click.echo(f"{metric}: {value:.4f}")
 
 
 @eval.command("metrics")

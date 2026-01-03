@@ -20,6 +20,7 @@ This project creates a queryable RAG (Retrieval-Augmented Generation) system of 
 - ✅ Semantic search validated and working
 - ✅ CLI tools operational
 - ✅ Claude Code skill available
+- ✅ Usage logging and performance analysis enabled
 
 ## Directory Structure
 
@@ -40,11 +41,13 @@ dpgeorge-review-db/
 │   ├── codebase.py                # MicroPython codebase context
 │   ├── fusion.py                  # Rank fusion utilities
 │   ├── prompt_builder.py          # Review prompt generation
-│   └── evaluator.py               # Retrieval evaluation
+│   ├── evaluator.py               # Retrieval evaluation
+│   └── usage_logger.py            # Performance logging
 ├── scripts/
 │   ├── collect.py                 # Collect reviews from GitHub
 │   ├── categorize_headless.py     # Batch categorize with Claude CLI
 │   ├── build_index_resume.py      # Resume-capable index builder
+│   ├── analyze_usage.py           # Analyze usage logs for performance
 │   ├── migrate_schema.py          # Database schema migrations
 │   └── ...                        # Other utility scripts
 ├── skill/
@@ -181,6 +184,84 @@ results = find_similar(diff_text, top_k=8)
 embedder = get_embedder()
 vec = embedder.embed_single("some query text")
 ```
+
+### Usage Logging and Performance Analysis
+
+All CLI operations are automatically logged to `logs/usage.jsonl` for performance analysis. The logging captures:
+- Operation type (search, review, index, eval)
+- All parameters (query, filters, options)
+- Duration in milliseconds
+- Result count
+- Any errors that occurred
+
+**View usage logs:**
+
+```bash
+# Analyze performance metrics
+python scripts/analyze_usage.py
+
+# Or manually inspect the JSONL file
+cat logs/usage.jsonl | jq '.'
+
+# Filter to specific operations
+cat logs/usage.jsonl | jq 'select(.operation == "review")'
+
+# Calculate average duration for reviews
+cat logs/usage.jsonl | jq -s 'map(select(.operation == "review" and .error == null)) | add / length | {avg_duration_ms: .duration_ms}'
+```
+
+**Example analysis output:**
+
+```
+=== Performance Analysis ===
+
+Total operations: 42
+Total errors: 0
+Success rate: 100.0%
+
+review:
+  Count: 24
+  Avg duration: 3247 ms
+  Min duration: 1832 ms
+  Max duration: 12403 ms
+  Avg results: 8.0
+
+  With --rerank: 8234 ms (n=8)
+  Without --rerank: 1947 ms (n=16)
+  Rerank overhead: +6287 ms (+323%)
+
+  With --codebase: 4521 ms (n=12)
+  Without --codebase: 2103 ms (n=12)
+  Codebase overhead: +2418 ms (+115%)
+
+search:
+  Count: 18
+  Avg duration: 892 ms
+  Avg results: 10.2
+```
+
+**Log entry format:**
+
+```json
+{
+  "timestamp": "2026-01-03T14:20:43.166079",
+  "operation": "review",
+  "params": {
+    "pr_number": null,
+    "diff_file": "changes.patch",
+    "use_stdin": false,
+    "top_k": 8,
+    "rerank": true,
+    "codebase": true,
+    "output": "prompt"
+  },
+  "duration_ms": 4521.34,
+  "result_count": 8,
+  "error": null
+}
+```
+
+The usage logs help identify performance bottlenecks, measure the impact of different options (--rerank, --codebase), and track success rates over time.
 
 ## Complete Workflow: Collecting and Indexing New Reviews
 
@@ -547,9 +628,11 @@ Query Text
 | `rag/embeddings.py` | Jina v2 Base Code embeddings wrapper |
 | `rag/retriever.py` | Hybrid dense+FTS search with RRF fusion |
 | `rag/cli.py` | `mpy-review-rag` command-line interface |
+| `rag/usage_logger.py` | Usage tracking and performance logging |
 | `rag/config.py` | Paths, model settings, retrieval parameters |
 | `scripts/collect.py` | GitHub API → SQLite collection |
 | `scripts/categorize_headless.py` | Claude CLI batch categorization |
+| `scripts/analyze_usage.py` | Performance analysis from usage logs |
 
 ## Dependencies
 
