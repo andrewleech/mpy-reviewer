@@ -289,21 +289,26 @@ class Config:
 
 ### As a Claude Code Skill
 
-To use as a Claude Code skill:
+To use as a Claude Code skill with natural language interface:
 
 1. **Install the skill:**
    ```bash
-   mkdir -p ~/.claude/skills/dpgeorge-review
+   mkdir -p ~/.claude/skills/mpy-review
    ln -s /home/anl/mpy/dpgeorge-review-db/skill/SKILL.md \
-         ~/.claude/skills/dpgeorge-review/SKILL.md
+         ~/.claude/skills/mpy-review/SKILL.md
    ```
 
-2. **Use in Claude Code:**
+2. **Use in Claude Code with natural language:**
    ```bash
-   /dpgeorge-review review --diff changes.patch --codebase --rerank --output prompt
+   /mpy-review the current branch
+   /mpy-review commit ca65d543
+   /mpy-review my changes to py/gc.c
+   /mpy-review find examples of memory allocation
    ```
 
-See `skill/SKILL.md` for complete skill documentation.
+The agent interprets your request and automatically runs the appropriate git/search commands.
+
+See `skill/SKILL.md` for the agent's complete instructions.
 
 ### As Python Module
 

@@ -100,49 +100,55 @@ mpy-review-rag search "type checking" --json
 
 ### Using as a Claude Code Skill
 
-The system can be installed as a Claude Code skill for convenient access within Claude Code sessions.
+The system can be installed as a Claude Code skill for conversational access within Claude Code sessions.
 
 **Installation:**
 
 ```bash
 # Create skill directory
-mkdir -p ~/.claude/skills/dpgeorge-review
+mkdir -p ~/.claude/skills/mpy-review
 
 # Link the SKILL.md file
 ln -s /home/anl/mpy/dpgeorge-review-db/skill/SKILL.md \
-      ~/.claude/skills/dpgeorge-review/SKILL.md
+      ~/.claude/skills/mpy-review/SKILL.md
 ```
 
 **Usage:**
 
-Once installed, invoke the skill with `/dpgeorge-review` in Claude Code:
+Once installed, use natural language with `/mpy-review`:
 
 ```bash
-# Generate review context for a diff
-/dpgeorge-review review --diff path/to/changes.patch
+# Review your current changes
+/mpy-review the current branch
 
-# With codebase context and re-ranking
-/dpgeorge-review review --diff changes.patch --codebase --rerank --output prompt
+# Review specific commit
+/mpy-review commit ca65d543
 
-# Search for patterns
-/dpgeorge-review search "memory allocation" --domain memory -k 10
+# Review specific files
+/mpy-review my changes to py/gc.c
 
-# Get statistics
-/dpgeorge-review stats
+# Find review examples
+/mpy-review find examples of memory allocation reviews
+
+# Get quick context
+/mpy-review what has dpgeorge said about error handling
 ```
 
 **Features:**
-- Full access to all CLI commands through `/dpgeorge-review`
+- Natural language interface (no CLI arguments needed)
+- Agent interprets intent and runs appropriate git/search commands
 - Semantic search across 18,614 categorized review comments
-- Review context generation for PRs and diffs
-- Filter by domain, severity, component, language context
-- Multiple output formats (context, prompt, JSON)
+- Automatic diff generation for commits, branches, files
+- Generates dpgeorge-style review feedback
 
-**Documentation:** See `skill/SKILL.md` for complete skill reference including:
-- All available commands and options
-- Filter categories and output formats
-- Performance tips and troubleshooting
-- Common workflows and examples
+**How it works:**
+The skill agent parses your natural language request, runs the appropriate git commands to generate diffs, pipes them to the review tool, and presents the results conversationally.
+
+**Documentation:** See `skill/SKILL.md` for the agent's complete instructions including:
+- Intent parsing and command mapping
+- Git integration patterns
+- When to use different options
+- Error handling
 
 ### Python API
 

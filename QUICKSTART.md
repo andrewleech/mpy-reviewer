@@ -94,10 +94,12 @@ mpy-review-rag review --diff sample.patch --output json | jq '.review_examples[0
 
 ### As a Skill
 
-After installing the skill (see "Claude Code Skill Setup" below), you can use:
+After installing the skill (see "Claude Code Skill Setup" below), you can use natural language:
 
 ```bash
-/dpgeorge-review review --diff my_changes.patch --codebase --rerank --output prompt
+/mpy-review the current branch
+/mpy-review commit ca65d543
+/mpy-review my changes to py/gc.c
 ```
 
 ### As Python Module
@@ -295,49 +297,53 @@ python3 -c "import rag; print(rag.__version__)"
 
 ## Claude Code Skill Setup
 
-To use this as a Claude Code skill:
+To use this as a Claude Code skill with natural language:
 
 ### 1. Install the Skill
 
 ```bash
 # Create skill directory
-mkdir -p ~/.claude/skills/dpgeorge-review
+mkdir -p ~/.claude/skills/mpy-review
 
 # Link the SKILL.md file
 ln -s /home/anl/mpy/dpgeorge-review-db/skill/SKILL.md \
-      ~/.claude/skills/dpgeorge-review/SKILL.md
+      ~/.claude/skills/mpy-review/SKILL.md
 ```
 
 ### 2. Verify Installation
 
-The skill should now be available in Claude Code. You can invoke it with:
+The skill should now be available in Claude Code. Test it with:
 
 ```bash
-/dpgeorge-review review --diff changes.patch
+/mpy-review stats
 ```
 
 **Note:** The skill requires the virtual environment and index to be set up first (steps above).
 
-### 3. Usage Examples
+### 3. Usage Examples (Natural Language)
 
 ```bash
-# Basic review
-/dpgeorge-review review --diff changes.patch
+# Review your current work
+/mpy-review the current branch
+/mpy-review my uncommitted changes
 
-# With codebase context
-/dpgeorge-review review --diff changes.patch --codebase
+# Review specific commit
+/mpy-review commit ca65d543
 
-# Full prompt for AI review
-/dpgeorge-review review --diff changes.patch --codebase --rerank --output prompt
+# Review specific files
+/mpy-review my changes to py/gc.c
 
-# Search for patterns
-/dpgeorge-review search "memory allocation" --domain memory
+# Find review examples
+/mpy-review find examples of memory allocation reviews
+/mpy-review what has dpgeorge said about error handling
 
 # Get statistics
-/dpgeorge-review stats
+/mpy-review stats
 ```
 
-See `skill/SKILL.md` for complete skill documentation.
+The agent interprets your natural language request and runs the appropriate commands automatically.
+
+See `skill/SKILL.md` for the agent's complete instructions.
 
 ---
 

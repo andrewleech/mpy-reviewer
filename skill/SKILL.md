@@ -1,485 +1,350 @@
 ---
-name: dpgeorge-review
-description: Semantic search and retrieval system for dpgeorge's MicroPython code review patterns. Use to find relevant past reviews, generate review context for PRs/diffs, or search for specific feedback patterns. Provides AI-assisted code review matching dpgeorge's technical standards and communication style.
+name: mpy-review
+description: Use this skill when the user wants to review MicroPython code changes using dpgeorge's review patterns. Invoke when user mentions reviewing code, finding review examples, or wants feedback on MicroPython PRs/commits/diffs in dpgeorge's style. Provides semantic search across 18,614 categorized review comments.
 ---
 
-# dpgeorge Review RAG Skill
+# MicroPython Review Assistant Skill
 
-## Description
+## Purpose
 
-A retrieval-augmented generation (RAG) system providing access to 18,614 categorized code review comments from Damien George (dpgeorge) on the MicroPython project. Use this skill to:
+This skill provides AI-assisted code review for MicroPython using Damien George's (dpgeorge) historical review patterns. It searches a database of 18,614 categorized review comments to find relevant examples and generate review context.
 
-- Find relevant past reviews for new code changes
-- Generate review context with examples in dpgeorge's style
-- Search for specific feedback patterns (memory, API design, portability, etc.)
-- Understand MicroPython review standards and conventions
+## When to Use This Skill
 
-## Prerequisites
+Invoke this skill when the user:
+- Wants to review code changes (branches, commits, diffs, PRs)
+- Asks for dpgeorge-style feedback on their code
+- Wants to find examples of specific review patterns
+- Needs review context for MicroPython code
+- Mentions reviewing, feedback, or code quality for MicroPython
 
-The dpgeorge-review system must be installed and indexed before using this skill.
+## Tool Location
 
-### One-Time Setup
+The underlying CLI tool is located at:
+```
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag
+```
 
-1. **Install the package:**
-   ```bash
-   cd /home/anl/mpy/dpgeorge-review-db
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -e .
-   ```
+Always use this full path when invoking the tool. Do not rely on PATH.
 
-2. **Build the vector index** (takes ~5 hours on CPU):
-   ```bash
-   source venv/bin/activate
-   python scripts/build_index_resume.py
-   ```
+## Understanding User Intent
 
-3. **Verify installation:**
-   ```bash
-   source venv/bin/activate
-   mpy-review-rag stats
-   ```
+Parse natural language requests and map to appropriate tool commands:
 
-   Should show:
-   - Index exists: True
-   - Number of records: 18,614
+### Review Current Changes
+**User says:** "review my current changes", "review this branch", "review what I've done"
 
-### Installing the Skill
+**What to do:**
+1. Generate diff: `git diff main` (or appropriate base branch)
+2. Pipe to tool: `git diff main | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --codebase --output prompt`
+3. Present the review prompt to help the user
 
-1. **Create skill directory:**
-   ```bash
-   mkdir -p ~/.claude/skills/dpgeorge-review
-   ```
-
-2. **Link or copy the SKILL.md:**
-   ```bash
-   ln -s /home/anl/mpy/dpgeorge-review-db/skill/SKILL.md \
-         ~/.claude/skills/dpgeorge-review/SKILL.md
-   ```
-
-3. **Verify skill is available:**
-   ```bash
-   # In Claude Code, the skill should be available as /dpgeorge-review
-   ```
-
-## Usage
-
-### Basic Review Context Generation
-
-Generate review context for a code diff:
-
+**Example:**
 ```bash
-# From a diff file
-/dpgeorge-review review --diff path/to/changes.patch
-
-# From a GitHub PR
-/dpgeorge-review review --pr 12345
-
-# From stdin
-git diff | /dpgeorge-review review --stdin
+git diff main | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --codebase --output prompt
 ```
 
-### Advanced Review Options
+### Review Specific Commit
+**User says:** "review commit abc123", "check commit abc123"
 
+**What to do:**
+1. Get commit diff: `git show abc123`
+2. Pipe to tool: `git show abc123 | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --output prompt`
+
+**Example:**
 ```bash
-# Include codebase context (definitions, similar patterns)
-/dpgeorge-review review --diff changes.patch --codebase
-
-# Use cross-encoder re-ranking for better relevance (slower)
-/dpgeorge-review review --diff changes.patch --rerank
-
-# Get more examples
-/dpgeorge-review review --diff changes.patch -k 15
-
-# Full prompt for AI review (best quality, slowest)
-/dpgeorge-review review --diff changes.patch --codebase --rerank --output prompt
-
-# JSON output for programmatic use
-/dpgeorge-review review --diff changes.patch --output json
+git show ca65d543 | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --codebase --output prompt
 ```
 
-### Search for Specific Patterns
+### Review Uncommitted Changes
+**User says:** "review my uncommitted changes", "review staged changes"
 
-Find similar reviews by semantic search:
-
+**What to do:**
 ```bash
-# Search by topic
-/dpgeorge-review search "memory allocation error handling"
-/dpgeorge-review search "null pointer dereference"
-/dpgeorge-review search "function naming conventions"
+# All uncommitted changes (staged + unstaged)
+git diff HEAD | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --output prompt
 
-# Filter by domain
-/dpgeorge-review search "API design" --domain api_design
-/dpgeorge-review search "edge cases" --domain correctness
-/dpgeorge-review search "performance" --domain performance
-
-# Filter by severity
-/dpgeorge-review search "blocking issue" --severity blocking
-/dpgeorge-review search "style issue" --severity nitpick
-
-# Filter by component
-/dpgeorge-review search "GPIO config" --component port_specific
-/dpgeorge-review search "GC issue" --component py_core
-
-# Get more results
-/dpgeorge-review search "memory leak" -k 20
-
-# Only show style examples
-/dpgeorge-review search "variable naming" --style-only
-
-# JSON output
-/dpgeorge-review search "error handling" --json
+# Only staged changes
+git diff --cached | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --output prompt
 ```
 
-### Index Management
+### Review GitHub PR
+**User says:** "review PR 12345", "check pull request 12345"
 
+**What to do:**
 ```bash
-# Show index statistics
-/dpgeorge-review stats
-
-# Rebuild index (if needed)
-/dpgeorge-review index --force
-
-# Build with specific batch size (memory-constrained systems)
-/dpgeorge-review index --force --batch-size 4
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --pr 12345 --codebase --output prompt
 ```
 
-### Evaluation
+### Review Specific Files
+**User says:** "review my changes to py/gc.c", "review changes in extmod/"
 
+**What to do:**
 ```bash
-# Build evaluation dataset
-/dpgeorge-review eval build-dataset --count 50 --stratify domain --output eval/dataset.json
+git diff main -- py/gc.c | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --output prompt
 
-# Run retrieval evaluation
-/dpgeorge-review eval retrieval --dataset eval/dataset.json --output eval/results
-
-# View evaluation metrics
-/dpgeorge-review eval metrics --results-dir eval/results
+git diff main -- extmod/ | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --codebase --output prompt
 ```
 
-## Output Formats
+### Find Review Examples
+**User says:** "find examples of memory allocation reviews", "show me dpgeorge's feedback on error handling"
 
-### Context Output (default)
+**What to do:**
+```bash
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag search "memory allocation" --domain memory -k 10
 
-Provides formatted review examples with diff context:
-
-```markdown
-# Relevant Past Reviews by dpgeorge
-
-## Example 1: correctness - blocking
-​```diff
-- old code
-+ new code
-​```
-
-dpgeorge's comment:
-> This will cause a null pointer dereference...
-
----
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag search "error handling" --domain correctness -k 10
 ```
 
-### Prompt Output
+### Get Quick Context (No Full Prompt)
+**User says:** "show me similar reviews", "what has dpgeorge said about this before"
 
-Full prompt ready to paste into an AI model for code review:
-
-- Style guide (dpgeorge's review principles)
-- 5-10 relevant review examples with context
-- Codebase context (if --codebase used)
-- Code to review
-- Task instructions
-
-### JSON Output
-
-Structured data for programmatic use:
-
-```json
-{
-  "review_examples": [
-    {
-      "comment_id": 12345,
-      "body": "comment text",
-      "diff_hunk": "diff context",
-      "domain": "correctness",
-      "severity": "blocking",
-      "score": 0.8
-    }
-  ],
-  "codebase_context": {...},
-  "query_length": 1234
-}
+**What to do:**
+Use `--output context` instead of `--output prompt` to get just the examples without full prompt structure:
+```bash
+git diff main | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --output context
 ```
 
-## Filters and Categories
+## Tool Commands Reference
 
-### Domains (13 categories)
+### Review Command
+```bash
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review [OPTIONS]
+```
 
+**Input Options (choose one):**
+- `--diff FILE` - Review a diff file
+- `--pr NUMBER` - Review a GitHub PR (uses gh CLI)
+- `--stdin` - Read diff from stdin (recommended for git integration)
+
+**Quality Options:**
+- `--codebase` - Include MicroPython codebase context (definitions, patterns) [RECOMMENDED]
+- `--rerank` - Use cross-encoder re-ranking for better relevance (slower, 5-10s on CPU)
+- `-k N` - Number of review examples (default: 8)
+
+**Output Options:**
+- `--output context` - Just the review examples (default, quick to read)
+- `--output prompt` - Full prompt ready for AI review (recommended for comprehensive review)
+- `--output json` - Structured JSON output
+
+### Search Command
+```bash
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag search "query" [OPTIONS]
+```
+
+**Options:**
+- `-k N` - Number of results (default: 10)
+- `--domain DOMAIN` - Filter by domain (see categories below)
+- `--severity SEVERITY` - Filter by severity (blocking, suggestion, nitpick)
+- `--component COMPONENT` - Filter by component (py_core, extmod, port_specific, etc.)
+- `--style-only` - Only show comments that exemplify dpgeorge's style
+- `--json` - JSON output
+
+### Stats Command
+```bash
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag stats
+```
+
+Shows index status and record count. Use this to verify the system is working.
+
+## Categories for Filtering
+
+### Domains (use with --domain)
+- `correctness` - Logic bugs, edge cases, error handling
 - `code_style` - Formatting, naming conventions
-- `correctness` - Logic bugs, edge cases
-- `api_design` - Public interfaces, usability
-- `memory` - Memory management, leaks
-- `performance` - Speed, efficiency
+- `api_design` - Public interfaces, function design
+- `memory` - Memory management, leaks, allocation
+- `performance` - Speed, efficiency optimizations
 - `portability` - Cross-platform compatibility
-- `documentation` - Comments, docs
+- `documentation` - Comments, docs, clarity
 - `testing` - Test coverage, quality
 - `security` - Security vulnerabilities
 - `architecture` - Design patterns, structure
-- `build_system` - Makefiles, configuration
+- `build_system` - Makefiles, build configuration
 - `error_handling` - Error paths, recovery
 
-### Severities
-
+### Severities (use with --severity)
 - `blocking` - Must fix before merge
 - `suggestion` - Recommended improvement
 - `nitpick` - Minor style/preference
 
-### Components
-
+### Components (use with --component)
 - `py_core` - Core Python runtime (py/)
 - `extmod` - Extended modules (extmod/)
 - `port_specific` - Port implementations (ports/)
-- `drivers` - Hardware drivers (drivers/)
-- `tools` - Build/development tools (tools/)
-- `tests` - Test suite (tests/)
-- `docs` - Documentation (docs/)
+- `drivers` - Hardware drivers
+- `tools` - Build/dev tools
+- `tests` - Test suite
+- `docs` - Documentation
 - `build_system` - Build configuration
-- `examples` - Example code
 
-## Performance
+## Output Interpretation
 
-### First Query
-- ~2-3 seconds (model loading)
+### Context Output (--output context)
+Returns formatted markdown with:
+- Review examples with diff context
+- dpgeorge's comments
+- Domain and severity tags
 
-### Subsequent Queries
-- Dense search only: ~0.5-1 second
-- With re-ranking: +5-10 seconds (CPU), +1-2 seconds (GPU)
-- With codebase context: +2-3 seconds
+Present this directly to the user to show relevant past reviews.
 
-### Tips for Speed
-```bash
-# Fastest (skip re-ranking)
-/dpgeorge-review review --diff file.patch
+### Prompt Output (--output prompt)
+Returns a complete prompt containing:
+- dpgeorge's review style guide
+- 5-10 relevant review examples with code context
+- The code to review
+- Task instructions for AI review
 
-# Balanced
-/dpgeorge-review review --diff file.patch --codebase
+**How to use:** After generating this prompt, you should:
+1. Present it to the user, OR
+2. Use it internally to generate a dpgeorge-style review yourself
 
-# Best quality (slowest)
-/dpgeorge-review review --diff file.patch --codebase --rerank
+### JSON Output (--output json)
+Returns structured data. Parse and present relevant fields to user.
+
+## Workflow Examples
+
+### Example 1: User Wants General Review
+
+**User:** "Can you review my current changes?"
+
+**Your response:**
+1. Run: `git diff main | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --codebase --output prompt`
+2. Read the generated prompt
+3. Use the prompt to provide dpgeorge-style review feedback to the user
+
+### Example 2: User Wants Quick Examples
+
+**User:** "What has dpgeorge said about similar code before?"
+
+**Your response:**
+1. Run: `git diff main | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --output context`
+2. Present the review examples to the user directly
+3. Summarize common themes
+
+### Example 3: User Asks About Specific Pattern
+
+**User:** "Find me examples of dpgeorge's feedback on GPIO configuration"
+
+**Your response:**
+1. Run: `/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag search "GPIO configuration" --component port_specific -k 15`
+2. Present the search results
+3. Summarize key patterns
+
+### Example 4: User Mentions Specific Commit
+
+**User:** "Review commit ca65d543"
+
+**Your response:**
+1. Run: `git show ca65d543 | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --codebase --output prompt`
+2. Use the prompt to provide review feedback
+3. Highlight key issues found from similar past reviews
+
+### Example 5: User Asks to Review Specific File
+
+**User:** "Can you review my changes to py/gc.c?"
+
+**Your response:**
+1. Run: `git diff main -- py/gc.c | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --codebase --output prompt`
+2. Provide targeted review focusing on that file
+3. Reference relevant dpgeorge patterns for GC code
+
+## Decision Guide: When to Use Which Options
+
+### Use `--codebase`
+**When:** User wants comprehensive review, mentions API usage, function calls, or needs context
+**Why:** Includes MicroPython codebase definitions and patterns
+**Cost:** +2-3 seconds
+
+### Use `--rerank`
+**When:** User emphasizes quality/accuracy, or initial results seem off-topic
+**Why:** Better relevance via cross-encoder scoring
+**Cost:** +5-10 seconds on CPU
+
+### Use `--output prompt`
+**When:** User wants detailed review, mentions "thorough", or you'll provide review feedback
+**Why:** Gives you complete context to generate dpgeorge-style review
+**Cost:** Longer output to process
+
+### Use `--output context`
+**When:** User asks for examples, "what has dpgeorge said", or wants quick reference
+**Why:** Just the examples, faster to read
+**Cost:** Minimal
+
+### Use `search` instead of `review`
+**When:** User asks about patterns/topics without providing specific code to review
+**Example:** "What does dpgeorge think about error handling?"
+**Why:** Semantic search, not diff-based retrieval
+
+## Handling Errors
+
+### "Index not found"
+The vector index hasn't been built. Inform user:
 ```
-
-## Common Workflows
-
-### 1. Review a Local Branch
-
-```bash
-# Generate diff for current branch
-git diff main > my_changes.patch
-
-# Get review context
-/dpgeorge-review review --diff my_changes.patch --codebase --output prompt > review_context.txt
-
-# Use the context to inform your AI-assisted review
-```
-
-### 2. Review a GitHub PR
-
-```bash
-# Get review examples for a PR
-/dpgeorge-review review --pr 12345 --codebase --rerank --output prompt
-
-# The output can be pasted into an AI model for review generation
-```
-
-### 3. Find Examples of Specific Feedback
-
-```bash
-# Find all memory-related blocking issues
-/dpgeorge-review search "memory allocation" --domain memory --severity blocking -k 20
-
-# Find port-specific API design suggestions
-/dpgeorge-review search "GPIO API" --component port_specific --domain api_design
-```
-
-### 4. Learn dpgeorge's Style
-
-```bash
-# Find style-heavy examples
-/dpgeorge-review search "code style" --style-only -k 30
-
-# Search for communication patterns
-/dpgeorge-review search "function naming" --style-only
-/dpgeorge-review search "comment style" --style-only
-```
-
-## Troubleshooting
-
-### "Index not found" Error
-
-```bash
-# Verify index exists
-source /home/anl/mpy/dpgeorge-review-db/venv/bin/activate
-/dpgeorge-review stats
-
-# If not, build it
+The review database index needs to be built first. Run:
 cd /home/anl/mpy/dpgeorge-review-db
+source venv/bin/activate
 python scripts/build_index_resume.py
 ```
 
-### Slow Performance
-
+### "Command not found"
+The tool path is incorrect. Verify with:
 ```bash
-# Don't use --rerank for faster results
-/dpgeorge-review review --diff file.patch
-
-# Or reduce top-k
-/dpgeorge-review review --diff file.patch -k 5
+ls -l /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag
 ```
 
-### Memory Issues
+### Git errors (no repository, invalid ref, etc.)
+Handle appropriately - ask user to clarify or check their git state.
 
+## Performance Expectations
+
+- **First query:** 2-3 seconds (model loading)
+- **Subsequent queries:** 0.5-1 second (dense search only)
+- **With --rerank:** +5-10 seconds on CPU
+- **With --codebase:** +2-3 seconds
+
+Inform user if a long operation is running.
+
+## Data Scope
+
+The database contains:
+- **18,614 categorized review comments**
+- **Source:** micropython/micropython repository
+- **Author:** Damien George (dpgeorge)
+- **Timeframe:** 2013-2025
+- **Coverage:** All PR review comments, issue comments, and review verdicts
+
+## Natural Language Understanding
+
+Be flexible with user requests. Map to appropriate commands:
+
+| User Intent | Tool Command |
+|-------------|--------------|
+| "review this" | `git diff \| ... review --stdin` |
+| "review commit X" | `git show X \| ... review --stdin` |
+| "review PR 123" | `... review --pr 123` |
+| "find GPIO reviews" | `... search "GPIO" --component port_specific` |
+| "show me memory issues" | `... search "memory" --domain memory --severity blocking` |
+| "examples of his style" | `... search "..." --style-only` |
+
+Always interpret user intent conversationally, then invoke the appropriate tool command.
+
+## Important Notes
+
+1. **Always use full path:** `/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag`
+2. **Prefer stdin for git integration:** Use `git diff \| ... --stdin` over temp files
+3. **Default to quality:** Use `--codebase --output prompt` unless user wants quick results
+4. **Be conversational:** Don't just relay CLI output, interpret and present meaningfully
+5. **Handle context:** If reviewing specific commits/branches, mention what's being reviewed
+6. **Cite examples:** When referencing dpgeorge patterns, show the actual comments from search results
+
+## Verification
+
+To test the skill is working:
 ```bash
-# If indexing fails, reduce batch size
-cd /home/anl/mpy/dpgeorge-review-db
-source venv/bin/activate
-python scripts/build_index_resume.py  # Uses batch_size=4 by default
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag stats
 ```
 
-### Command Not Found
-
-Ensure virtual environment is activated:
-
-```bash
-source /home/anl/mpy/dpgeorge-review-db/venv/bin/activate
-which mpy-review-rag  # Should show venv path
-```
-
-Or use full path:
-```bash
-/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --diff file.patch
-```
-
-## Data Statistics
-
-- **Total records**: 18,614 categorized review comments
-- **Source PRs**: 5,542 (2013-2025)
-- **Review comments**: 6,842 (inline code feedback)
-- **Issue comments**: 11,379 (PR discussion)
-- **Review verdicts**: 4,584
-
-### Distribution
-
-**By Domain:**
-- Correctness: 21.2%
-- Code Style: 17.3%
-- API Design: 12.7%
-- Documentation: 11.5%
-- Architecture: 11.3%
-
-**By Severity:**
-- Suggestion: 57.9%
-- Nitpick: 28.5%
-- Blocking: 13.6%
-
-**By Component:**
-- Port-specific: 32.4%
-- Core Python: 31.9%
-- Extended modules: 9.8%
-
-## Technical Details
-
-### Models Used
-
-- **Embeddings**: jinaai/jina-embeddings-v2-base-code (768-dim, 8K context)
-- **Re-ranker**: BAAI/bge-reranker-large (cross-encoder)
-
-### Search Pipeline
-
-1. **Query Processing**: Extract identifiers and patterns
-2. **Hybrid Retrieval**: Dense (embedding) + Sparse (BM25) search
-3. **Fusion**: Reciprocal Rank Fusion (RRF)
-4. **Filtering**: Domain, severity, component filters
-5. **Re-ranking** (optional): Cross-encoder scoring
-6. **Diversity**: MMR selection for balanced results
-
-### Database
-
-- **Storage**: SQLite (source) + LanceDB (vector index)
-- **Size**: 28MB SQLite + 1.4GB LanceDB
-- **Location**: /home/anl/mpy/dpgeorge-review-db/data/
-
-## Examples
-
-### Example 1: Review a Diff File
-
-```bash
-$ /dpgeorge-review review --diff my_changes.patch --codebase
-# Relevant Past Reviews by dpgeorge
-
-## Example 1: correctness - blocking
-​```diff
-+void *ptr = malloc(size);
-+use(ptr);
-​```
-
-dpgeorge's comment:
-> Need to check if malloc returns NULL before using ptr.
-
----
-
-## Example 2: code_style - suggestion
-...
-```
-
-### Example 2: Search for API Design Patterns
-
-```bash
-$ /dpgeorge-review search "constructor arguments" --domain api_design -k 5
---- Result 1 ---
-Domain: api_design | Severity: suggestion
-Score: 0.8543
-
-Better to have constructor arguments with sensible defaults rather than
-requiring a separate init() call...
-```
-
-### Example 3: Generate Full Review Prompt
-
-```bash
-$ /dpgeorge-review review --diff my_changes.patch --codebase --rerank --output prompt > review.txt
-
-# The review.txt now contains:
-# - dpgeorge's review style guide
-# - 8 relevant review examples with diff context
-# - MicroPython codebase context (definitions, patterns)
-# - Your code to review
-# - Task instructions for the AI model
-```
-
-## Integration with AI Review
-
-The most common workflow is:
-
-1. Generate review context with this skill
-2. Pass the context to an AI model (Claude, GPT, etc.)
-3. The AI reviews the code using dpgeorge's patterns
-
-Example:
-```bash
-# Get context
-/dpgeorge-review review --pr 12345 --codebase --rerank --output prompt > context.txt
-
-# Now paste context.txt into Claude Code or API
-# The AI will review the PR in dpgeorge's style
-```
-
-## Version and Updates
-
-- **Database**: Built from micropython/micropython through 2025-01
-- **Index**: 18,614 records
-- **To update**: Re-run data collection and indexing scripts in the project repository
-
-## Support
-
-For issues, see:
-- `/home/anl/mpy/dpgeorge-review-db/README.md` - Project overview
-- `/home/anl/mpy/dpgeorge-review-db/CLAUDE.md` - Development guide
-- `/home/anl/mpy/dpgeorge-review-db/QUICKSTART.md` - Quick start guide
+Should show:
+- Index exists: True
+- Number of records: 18,614
