@@ -72,14 +72,8 @@ cd /home/anl/mpy/dpgeorge-review-db
 python3 -m venv venv
 source venv/bin/activate
 
-# Install dependencies
+# Install all dependencies (includes reranking and codebase context)
 pip install -e .
-
-# Optional: Install additional features for enhanced functionality
-pip install -e '.[all]'        # All optional features (reranking + codebase)
-# OR individually:
-pip install -e '.[reranking]'  # Cross-encoder re-ranking for better quality
-pip install -e '.[codebase]'   # MicroPython codebase context via codanna
 
 # For CPU-only PyTorch (recommended for WSL2/systems without CUDA):
 pip install torch --index-url https://download.pytorch.org/whl/cpu

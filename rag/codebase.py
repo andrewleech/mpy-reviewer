@@ -32,10 +32,9 @@ class CodebaseRetriever:
             logger.info("Codanna is available")
             return True
         except ImportError:
-            logger.warning(
-                "codanna not available. Codebase context retrieval will be limited.\n"
-                "  Install with: pip install 'mpy-review-rag[codebase]'\n"
-                "  Or directly: pip install codanna-cli"
+            logger.info(
+                "codanna not available. Codebase context retrieval will be limited. "
+                "Install with: pip install codanna-cli"
             )
             return False
 

@@ -23,10 +23,6 @@ pip install -e .
 
 # Or CPU-only (smaller, slower)
 pip install -e .
-
-# Optional: Install additional features
-pip install -e '.[all]'        # All features (reranking + codebase context)
-pip install -e '.[codebase]'   # Codebase context (removes codanna warning)
 ```
 
 ## Build Index (2-3 hours on CPU, 15-20 min on GPU) ⏳

@@ -22,15 +22,9 @@ cd /home/corona/mpy/dpgeorge-review-db
 python3 -m venv venv
 source venv/bin/activate
 
-# Install dependencies (with CUDA support if available)
+# Install dependencies (includes reranking and codebase context for best quality)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 pip install -e .
-
-# Optional: Install additional features
-pip install -e '.[all]'        # All optional features (reranking + codebase)
-# OR individually:
-pip install -e '.[reranking]'  # Cross-encoder re-ranking
-pip install -e '.[codebase]'   # MicroPython codebase context via codanna
 ```
 
 ### Build Vector Index
