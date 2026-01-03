@@ -32,9 +32,8 @@ class CodebaseRetriever:
             logger.info("Codanna is available")
             return True
         except ImportError:
-            logger.info(
-                "codanna not available. Codebase context retrieval will be limited. "
-                "Install with: pip install codanna-cli"
+            logger.debug(
+                "codanna not available. Codebase context retrieval will use fallback patterns."
             )
             return False
 

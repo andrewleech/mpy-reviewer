@@ -11,9 +11,11 @@ tqdm>=4.65.0
 numpy>=1.24.0
 pyarrow>=14.0.0
 
-# Quality features (cross-encoder re-ranking, codebase context)
+# Quality features (cross-encoder re-ranking)
 sentence-transformers>=2.2.0
-codanna-cli>=0.1.0
+
+# Note: codanna for codebase context is not yet available on PyPI
+# The system works without it but with limited codebase context
 
 # NOTE: For torch, choose one:
 # GPU (larger, ~2GB): pip install torch
