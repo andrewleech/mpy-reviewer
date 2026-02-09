@@ -74,6 +74,20 @@ VARIANTS = {
         claude_model="opus",
         description="Claude Opus 4.6 (with RAG)",
     ),
+    "base_qwen": Variant(
+        id="base_qwen",
+        model_name="qwen2.5-coder:7b-instruct",
+        uses_rag=False,
+        backend="ollama",
+        description="Base Qwen2.5-Coder-7B-Instruct (Q4, no RAG)",
+    ),
+    "base_qwen_rag": Variant(
+        id="base_qwen_rag",
+        model_name="qwen2.5-coder:7b-instruct",
+        uses_rag=True,
+        backend="ollama",
+        description="Base Qwen2.5-Coder-7B-Instruct (Q4, with RAG)",
+    ),
 }
 
 TEST_PRS = [

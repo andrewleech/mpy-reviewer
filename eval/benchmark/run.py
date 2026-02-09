@@ -46,14 +46,14 @@ OLLAMA_URL = "http://localhost:11435/api/generate"
 OLLAMA_NUM_CTX = 32768
 OLLAMA_TEMPERATURE = 0.7
 
-CLAUDE_MAX_BUDGET = 0.50
+CLAUDE_MAX_BUDGET = 2.00
 CLAUDE_MAX_PARALLEL = 3
 
-# All tools to disable for Claude (static prompt, no tool use)
-CLAUDE_DISALLOWED_TOOLS = ",".join([
-    "Bash", "Read", "Write", "Edit", "Glob", "Grep",
-    "Task", "WebFetch", "WebSearch", "NotebookEdit",
-])
+# System prompt appended to prevent tool/skill invocation in static-prompt mode
+CLAUDE_SYSTEM_APPEND = (
+    "You are a code reviewer. Output your review as plain text. "
+    "Do not attempt to use any tools, skills, or commands."
+)
 
 
 def result_path(variant_id: str, pr_number: int, run: int) -> Path:
@@ -149,7 +149,8 @@ def run_claude(variant: Variant, prompt: str, pr_number: int, run_num: int) -> d
             "claude", "-p",
             "--model", variant.claude_model,
             "--output-format", "json",
-            "--disallowed-tools", CLAUDE_DISALLOWED_TOOLS,
+            "--tools", "",
+            "--append-system-prompt", CLAUDE_SYSTEM_APPEND,
             "--max-budget-usd", str(CLAUDE_MAX_BUDGET),
         ]
 
@@ -158,7 +159,7 @@ def run_claude(variant: Variant, prompt: str, pr_number: int, run_num: int) -> d
             input=prompt,
             capture_output=True,
             text=True,
-            timeout=300,  # 5 minute timeout
+            timeout=600,  # 10 minute timeout (Opus + large prompts can be slow)
         )
 
         duration_ms = (time.time() - start) * 1000
@@ -179,10 +180,21 @@ def run_claude(variant: Variant, prompt: str, pr_number: int, run_num: int) -> d
                 "error": f"claude exit code {result.returncode}: {result.stderr[:500]}",
             }
 
-        # Parse JSON output from claude
+        # Parse JSON output from claude -p --output-format json
+        # Format: {"type":"result","subtype":"success","result":"...","total_cost_usd":...}
+        error = None
         try:
             claude_output = json.loads(result.stdout)
-            response_text = claude_output.get("result", result.stdout)
+            response_text = claude_output.get("result") or ""
+            # Check for budget/error subtypes
+            subtype = claude_output.get("subtype", "")
+            if subtype and subtype != "success":
+                error = f"claude subtype: {subtype}"
+                if not response_text:
+                    logger.warning(
+                        f"[{variant.id}] PR #{pr_number} run {run_num}: "
+                        f"non-success subtype '{subtype}', cost=${claude_output.get('total_cost_usd', '?')}"
+                    )
         except json.JSONDecodeError:
             # If JSON parsing fails, use raw stdout
             response_text = result.stdout
@@ -203,7 +215,7 @@ def run_claude(variant: Variant, prompt: str, pr_number: int, run_num: int) -> d
             "timestamp": datetime.now().isoformat(),
             "prompt_chars": len(prompt),
             "response_chars": len(response_text),
-            "error": None,
+            "error": error,
         }
     except subprocess.TimeoutExpired:
         duration_ms = (time.time() - start) * 1000

@@ -132,8 +132,9 @@ def call_judge(prompt: str, schema: dict) -> dict:
         "--model", JUDGE_MODEL,
         "--output-format", "json",
         "--json-schema", json.dumps(schema),
-        "--disallowed-tools", "Bash,Read,Write,Edit,Glob,Grep,Task,WebFetch,WebSearch,NotebookEdit",
-        "--max-budget-usd", "0.50",
+        "--tools", "",
+        "--append-system-prompt", "Output your evaluation as JSON. Do not attempt to use any tools, skills, or commands.",
+        "--max-budget-usd", "1.00",
     ]
 
     result = subprocess.run(
@@ -147,22 +148,28 @@ def call_judge(prompt: str, schema: dict) -> dict:
     if result.returncode != 0:
         raise RuntimeError(f"claude judge failed: {result.stderr[:500]}")
 
-    # Parse the JSON output
+    # Parse the JSON output from claude -p --output-format json --json-schema
+    # Format: {"type":"result", "structured_output": {...}, "result": "", ...}
     try:
         output = json.loads(result.stdout)
-        # claude --output-format json wraps in {"result": "..."} sometimes
-        if isinstance(output, dict) and "result" in output and isinstance(output["result"], str):
-            return json.loads(output["result"])
-        return output
     except json.JSONDecodeError:
-        # Try to extract JSON from the output
-        text = result.stdout
-        # Look for JSON object in the output
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start >= 0 and end > start:
-            return json.loads(text[start:end])
-        raise RuntimeError(f"Could not parse judge output as JSON: {text[:500]}")
+        raise RuntimeError(f"Could not parse claude output as JSON: {result.stdout[:500]}")
+
+    # --json-schema puts structured output in the "structured_output" field
+    if isinstance(output, dict) and "structured_output" in output:
+        structured = output["structured_output"]
+        if isinstance(structured, dict):
+            return structured
+
+    # Fallback: check "result" field (may contain JSON string)
+    if isinstance(output, dict) and "result" in output:
+        result_val = output["result"]
+        if isinstance(result_val, dict):
+            return result_val
+        if isinstance(result_val, str) and result_val.strip():
+            return json.loads(result_val)
+
+    raise RuntimeError(f"No structured output in judge response: {json.dumps(output)[:500]}")
 
 
 def score_single_review(variant_id: str, pr_number: int, run_num: int, force: bool = False) -> Optional[dict]:

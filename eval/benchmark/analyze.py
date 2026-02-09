@@ -228,6 +228,7 @@ def generate_report(scores: dict, consistency: dict, results: dict) -> str:
         ("sonnet_bare", "sonnet_rag", "Sonnet 4.5"),
         ("opus_bare", "opus_rag", "Opus 4.6"),
         ("ft_f16", "ft_f16_rag", "Fine-tuned F16"),
+        ("base_qwen", "base_qwen_rag", "Base Qwen 7B"),
     ]
 
     header = "| Model | Criterion | Bare | RAG | Delta |"
