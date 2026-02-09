@@ -23,8 +23,8 @@ logs/
 # Generated output
 output/
 
-# Unused directories
-eval/
+# Eval benchmark (generated data excluded via eval/benchmark/.gitignore)
+# Source files are tracked.
 tests/
 
 # Editor

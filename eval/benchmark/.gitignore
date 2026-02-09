@@ -1,0 +1,7 @@
+# Generated benchmark data
+diffs/
+prompts/
+results/
+scores/
+report/
+__pycache__/
