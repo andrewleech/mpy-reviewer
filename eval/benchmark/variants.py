@@ -88,6 +88,20 @@ VARIANTS = {
         backend="ollama",
         description="Base Qwen2.5-Coder-7B-Instruct (Q4, with RAG)",
     ),
+    "qwen3_coder": Variant(
+        id="qwen3_coder",
+        model_name="qwen3-coder-next:q4_K_M",
+        uses_rag=False,
+        backend="ollama",
+        description="Qwen3-Coder-Next 80B-A3B MoE (Q4_K_M, no RAG)",
+    ),
+    "qwen3_coder_rag": Variant(
+        id="qwen3_coder_rag",
+        model_name="qwen3-coder-next:q4_K_M",
+        uses_rag=True,
+        backend="ollama",
+        description="Qwen3-Coder-Next 80B-A3B MoE (Q4_K_M, with RAG)",
+    ),
 }
 
 TEST_PRS = [
