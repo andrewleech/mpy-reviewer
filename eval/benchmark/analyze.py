@@ -230,6 +230,7 @@ def generate_report(scores: dict, consistency: dict, results: dict) -> str:
         ("ft_f16", "ft_f16_rag", "Fine-tuned F16"),
         ("base_qwen", "base_qwen_rag", "Base Qwen 7B"),
         ("qwen3_coder", "qwen3_coder_rag", "Qwen3-Coder-Next 80B-A3B"),
+        ("ft_v2_q4", "ft_v2_q4_rag", "Fine-tuned v2 Q4"),
     ]
 
     header = "| Model | Criterion | Bare | RAG | Delta |"
@@ -280,6 +281,51 @@ def generate_report(scores: dict, consistency: dict, results: dict) -> str:
         lines.append("*Insufficient data for quantization comparison.*")
 
     lines.append("")
+
+    # 4b. v1 vs v2 fine-tune comparison
+    lines.append("## v1 vs v2 Fine-tune Comparison")
+    lines.append("")
+
+    v1v2_pairs = [
+        ("ft_q4", "ft_v2_q4", "No RAG"),
+        ("ft_f16_rag", "ft_v2_q4_rag", "With RAG"),
+    ]
+
+    has_v1v2 = any(
+        v1 in variant_agg and v2 in variant_agg
+        for v1, v2, _ in v1v2_pairs
+    )
+
+    if has_v1v2:
+        lines.append("Direct comparison of v1 (Qwen2.5-Coder 7B) and v2 (Qwen3-Coder-Next 80B MoE) fine-tunes.")
+        lines.append("")
+
+        for v1_id, v2_id, label in v1v2_pairs:
+            if v1_id not in variant_agg or v2_id not in variant_agg:
+                continue
+
+            lines.append(f"### {label}")
+            lines.append("")
+            header = f"| Criterion | v1 ({v1_id}) | v2 ({v2_id}) | Delta |"
+            lines.append(header)
+            lines.append("|-----------|-----|-----|-------|")
+
+            for c in CRITERIA:
+                v1_val = variant_agg[v1_id][f"{c}_mean"]
+                v2_val = variant_agg[v2_id][f"{c}_mean"]
+                delta = v2_val - v1_val
+                sign = "+" if delta >= 0 else ""
+                lines.append(f"| {CRITERIA_SHORT[c]} | {fmt(v1_val)} | {fmt(v2_val)} | {sign}{fmt(delta)} |")
+
+            v1_overall = variant_agg[v1_id]["overall_mean"]
+            v2_overall = variant_agg[v2_id]["overall_mean"]
+            delta = v2_overall - v1_overall
+            sign = "+" if delta >= 0 else ""
+            lines.append(f"| **Overall** | **{fmt(v1_overall)}** | **{fmt(v2_overall)}** | **{sign}{fmt(delta)}** |")
+            lines.append("")
+    else:
+        lines.append("*Insufficient data for v1 vs v2 comparison.*")
+        lines.append("")
 
     # 5. Consistency analysis
     lines.append("## Consistency Across Repeats")

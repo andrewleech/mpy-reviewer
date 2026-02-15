@@ -91,9 +91,10 @@ def run_ollama(variant: Variant, prompt: str, pr_number: int, run_num: int) -> d
                 "options": {
                     "temperature": OLLAMA_TEMPERATURE,
                     "num_ctx": OLLAMA_NUM_CTX,
+                    "num_predict": 2048,  # Cap generation length
                 },
             },
-            timeout=600,  # 10 minute timeout
+            timeout=1800,  # 30 minute timeout (MoE prefill is slow on large prompts)
         )
         resp.raise_for_status()
         data = resp.json()

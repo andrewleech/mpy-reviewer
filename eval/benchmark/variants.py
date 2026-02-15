@@ -102,6 +102,20 @@ VARIANTS = {
         backend="ollama",
         description="Qwen3-Coder-Next 80B-A3B MoE (Q4_K_M, with RAG)",
     ),
+    "ft_v2_q4": Variant(
+        id="ft_v2_q4",
+        model_name="micropython-expert-v2:q4_k_m",
+        uses_rag=False,
+        backend="ollama",
+        description="Fine-tuned Qwen3-Coder-Next 80B MoE (v2 data, Q4_K_M, no RAG)",
+    ),
+    "ft_v2_q4_rag": Variant(
+        id="ft_v2_q4_rag",
+        model_name="micropython-expert-v2:q4_k_m",
+        uses_rag=True,
+        backend="ollama",
+        description="Fine-tuned Qwen3-Coder-Next 80B MoE (v2 data, Q4_K_M, with RAG)",
+    ),
 }
 
 TEST_PRS = [

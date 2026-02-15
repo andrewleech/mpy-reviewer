@@ -137,12 +137,15 @@ def call_judge(prompt: str, schema: dict) -> dict:
         "--max-budget-usd", "1.00",
     ]
 
+    import os
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
     result = subprocess.run(
         cmd,
         input=prompt,
         capture_output=True,
         text=True,
         timeout=300,
+        env=env,
     )
 
     if result.returncode != 0:
