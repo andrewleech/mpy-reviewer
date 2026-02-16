@@ -9,6 +9,8 @@ description: Use this skill when the user wants to review MicroPython code chang
 
 This skill provides AI-assisted code review for MicroPython using Damien George's (dpgeorge) historical review patterns. It searches a database of 18,614 categorized review comments to find relevant examples and generate review context.
 
+**Note:** When the `mpy-review-rag` MCP server is available (registered in `.claude/settings.json`), prefer using MCP tools directly (`review_diff`, `search_reviews`, etc.) instead of the CLI. The MCP server keeps the embedding model warm across calls, eliminating 2-3s cold start per query. This skill remains as a fallback for sessions outside the project scope.
+
 ## When to Use This Skill
 
 Invoke this skill when the user:

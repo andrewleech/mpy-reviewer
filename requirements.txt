@@ -14,6 +14,9 @@ pyarrow>=14.0.0
 # Quality features (cross-encoder re-ranking)
 sentence-transformers>=2.2.0
 
+# MCP server
+fastmcp>=2.0,<3
+
 # Note: codanna for codebase context is not yet available on PyPI
 # The system works without it but with limited codebase context
 
