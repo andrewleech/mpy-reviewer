@@ -36,7 +36,7 @@ All models receive pre-generated static prompts (no interactive tool use). This 
 
 **"Bare" variants** receive: expanded diff + PR metadata + task instructions (review criteria, severity levels).
 
-**"RAG" variants** receive: dpgeorge style guide (~900 tok) + 8 retrieved review examples (~4000 tok) + codebase context from codanna (~1000 tok) + expanded diff + task instructions.
+**"RAG" variants** receive: maintainer style guide (~900 tok) + 8 retrieved review examples (~4000 tok) + codebase context from codanna (~1000 tok) + expanded diff + task instructions.
 
 **Claude tool access**: Disabled via `--disallowed-tools` to prevent independent codebase exploration.
 
@@ -52,7 +52,7 @@ Each of the 105 reviews scored on 6 criteria (1-5 scale):
 2. **Relevance** — Does the review focus on important aspects?
 3. **Completeness** — Did it catch major issues?
 4. **Actionability** — Are suggestions specific enough to act on?
-5. **Style fidelity** — Does it match dpgeorge's direct, terse style?
+5. **Style fidelity** — Does it match the lead maintainer's direct, terse style?
 6. **Severity calibration** — Are blocking/suggestion/nitpick levels appropriate?
 
 ### Consistency Analysis
@@ -70,7 +70,7 @@ For each (variant, PR) group of 3 repeats, the judge also assesses cross-repeat 
 - SSH tunnel to piai: `ssh -L 11435:localhost:11434 piai`
 - `micropython-expert:f16` and `micropython-expert:q4-k-m` loaded in Ollama on piai
 - `claude` CLI available locally
-- `mpy-review-rag` installed (`pip install -e .` from project root)
+- `mpy-reviewer` installed (`pip install -e .` from project root)
 - `gh` CLI authenticated with access to micropython/micropython
 
 ### Execution

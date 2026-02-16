@@ -13,7 +13,7 @@
     ]
   },
   "mcpServers": {
-    "mpy-review-rag": {
+    "mpy-reviewer": {
       "type": "stdio",
       "command": "/home/anl/mpy/dpgeorge-review-db/venv/bin/python",
       "args": ["/home/anl/mpy/dpgeorge-review-db/mcp_server.py"],

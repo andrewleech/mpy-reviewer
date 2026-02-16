@@ -109,7 +109,7 @@ def expand_pr_context(
 ) -> List[Dict[str, Any]]:
     """Get other review comments from the same PR.
 
-    Useful for understanding what dpgeorge cared about in a review session.
+    Useful for understanding review priorities in a session.
     Prioritizes blocking > suggestion comments.
 
     Args:
@@ -159,7 +159,7 @@ def get_file_review_summary(
 ) -> Dict[str, Any]:
     """Aggregate review themes for a specific file across all PRs.
 
-    Useful for queries like "what does dpgeorge always flag in py/mpconfig.h?"
+    Useful for queries like "what gets flagged in py/mpconfig.h?"
 
     Args:
         file_path: File path (as stored in review_comments.path).
@@ -248,7 +248,7 @@ def get_pr_review_context(
     max_comments: int = 20,
     conn: Optional[sqlite3.Connection] = None,
 ) -> Dict[str, Any]:
-    """Get dpgeorge's full review history for a PR, organized as threads.
+    """Get full review history for a PR, organized as threads.
 
     This is the main entry point for the get_pr_review_history MCP tool.
 
@@ -438,7 +438,7 @@ def expand_results_with_threads(
                     start = max(0, idx - max_thread_len // 2)
                     thread = thread[start : start + max_thread_len]
 
-                # Note: database only contains dpgeorge's comments.
+                # Note: database only contains the lead maintainer's comments.
                 # Thread may have gaps where the other participant's
                 # messages were (they are not stored).
                 result["thread"] = [

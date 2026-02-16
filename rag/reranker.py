@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class ReviewReranker:
-    """Cross-encoder re-ranker for dpgeorge review comments."""
+    """Cross-encoder re-ranker for review comments."""
 
     def __init__(self, model_name: Optional[str] = None):
         """Initialize the reranker with a cross-encoder model.

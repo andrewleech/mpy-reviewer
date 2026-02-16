@@ -1,6 +1,6 @@
-# Quick Start Guide - dpgeorge Review RAG System
+# Quick Start Guide - MicroPython Review RAG System
 
-Get started with the dpgeorge code review assistant in 5 minutes.
+Get started with the MicroPython code review assistant in 5 minutes.
 
 ## Prerequisites
 
@@ -11,7 +11,7 @@ Get started with the dpgeorge code review assistant in 5 minutes.
 ## Installation (5 minutes)
 
 ```bash
-cd /home/corona/mpy/dpgeorge-review-db
+cd /home/anl/mpy/mpy-reviewer
 
 # Create virtual environment
 python3 -m venv venv
@@ -29,14 +29,14 @@ pip install -e .
 
 ```bash
 source venv/bin/activate
-mpy-review-rag index --force --batch-size 32
+mpy-reviewer index --force --batch-size 32
 ```
 
 **Check progress:**
 ```bash
 tail -f index_build.log
 # Or while running in background:
-watch 'ps aux | grep mpy-review-rag | grep index'
+watch 'ps aux | grep mpy-reviewer | grep index'
 ```
 
 ## Try It Out (after index is built)
@@ -61,33 +61,33 @@ cat > sample.patch << 'EOF'
 EOF
 
 # Get review context
-mpy-review-rag review --diff sample.patch
+mpy-reviewer review --diff sample.patch
 
 # Get full prompt for Claude
-mpy-review-rag review --diff sample.patch --output prompt
+mpy-reviewer review --diff sample.patch --output prompt
 ```
 
 ### Example 2: Review a GitHub PR
 
 ```bash
 # Review PR by number
-mpy-review-rag review --pr 12345 --output prompt
+mpy-reviewer review --pr 12345 --output prompt
 ```
 
 ### Example 3: Advanced Options
 
 ```bash
 # Include codebase context
-mpy-review-rag review --diff sample.patch --codebase
+mpy-reviewer review --diff sample.patch --codebase
 
 # Use cross-encoder re-ranking (slower, more accurate)
-mpy-review-rag review --diff sample.patch --rerank
+mpy-reviewer review --diff sample.patch --rerank
 
 # Both combined (best quality)
-mpy-review-rag review --diff sample.patch --codebase --rerank --output prompt
+mpy-reviewer review --diff sample.patch --codebase --rerank --output prompt
 
 # Get structured output
-mpy-review-rag review --diff sample.patch --output json | jq '.review_examples[0]'
+mpy-reviewer review --diff sample.patch --output json | jq '.review_examples[0]'
 ```
 
 ## Use with Claude Code
@@ -126,19 +126,19 @@ print(prompt)
 
 ```bash
 # Search by keyword
-mpy-review-rag search "memory leak"
-mpy-review-rag search "null pointer"
+mpy-reviewer search "memory leak"
+mpy-reviewer search "null pointer"
 
 # Filter by domain
-mpy-review-rag search "API design" --domain api_design
-mpy-review-rag search "edge cases" --domain correctness
+mpy-reviewer search "API design" --domain api_design
+mpy-reviewer search "edge cases" --domain correctness
 
 # Filter by severity
-mpy-review-rag search "blocking issue" --severity blocking
-mpy-review-rag search "code style" --severity nitpick
+mpy-reviewer search "blocking issue" --severity blocking
+mpy-reviewer search "code style" --severity nitpick
 
 # Show only style examples
-mpy-review-rag search "function naming" --style-only
+mpy-reviewer search "function naming" --style-only
 ```
 
 ## Common Tasks
@@ -146,26 +146,26 @@ mpy-review-rag search "function naming" --style-only
 ### Find All Reviews on Memory Issues
 
 ```bash
-mpy-review-rag review --diff code.patch --domain memory --top-k 15
+mpy-reviewer review --diff code.patch --domain memory --top-k 15
 ```
 
 ### Find Blocking Issues Pattern
 
 ```bash
-mpy-review-rag search "common error pattern" --severity blocking --domain correctness
+mpy-reviewer search "common error pattern" --severity blocking --domain correctness
 ```
 
 ### Get Just the Code Examples
 
 ```bash
-mpy-review-rag review --diff code.patch --output json | \
+mpy-reviewer review --diff code.patch --output json | \
   jq '.review_examples[] | {domain, severity, body}'
 ```
 
 ### Generate Full Review Prompt
 
 ```bash
-mpy-review-rag review --diff code.patch \
+mpy-reviewer review --diff code.patch \
   --codebase \
   --rerank \
   --output prompt > review_prompt.txt
@@ -179,20 +179,20 @@ mpy-review-rag review --diff code.patch \
 
 ```bash
 # Create evaluation dataset with 20 samples
-mpy-review-rag eval build-dataset --count 20 --output eval/dataset.json
+mpy-reviewer eval build-dataset --count 20 --output eval/dataset.json
 
 # Stratified by domain (balanced coverage)
-mpy-review-rag eval build-dataset --count 50 --stratify domain
+mpy-reviewer eval build-dataset --count 50 --stratify domain
 ```
 
 ### Measure Retrieval Quality
 
 ```bash
 # Run evaluation
-mpy-review-rag eval retrieval --dataset eval/dataset.json --output eval/results
+mpy-reviewer eval retrieval --dataset eval/dataset.json --output eval/results
 
 # View results
-mpy-review-rag eval metrics --results-dir eval/results
+mpy-reviewer eval metrics --results-dir eval/results
 ```
 
 Expected metrics (on CPU-based search):
@@ -206,10 +206,10 @@ Expected metrics (on CPU-based search):
 
 ```bash
 source venv/bin/activate
-mpy-review-rag stats
+mpy-reviewer stats
 
 # If index doesn't exist:
-mpy-review-rag index --force
+mpy-reviewer index --force
 ```
 
 ### Models Won't Download
@@ -220,18 +220,18 @@ ping huggingface.co
 
 # Clear cache and try again
 rm -rf ~/.cache/huggingface
-mpy-review-rag stats
+mpy-reviewer stats
 ```
 
 ### Running Out of Memory
 
 ```bash
 # Reduce batch size during indexing
-mpy-review-rag index --force --batch-size 8
+mpy-reviewer index --force --batch-size 8
 
 # Or use CPU-only (if you installed with GPU)
 pip install torch --index-url https://download.pytorch.org/whl/cpu
-mpy-review-rag index --force --batch-size 16
+mpy-reviewer index --force --batch-size 16
 ```
 
 ### Re-ranking is Slow
@@ -240,7 +240,7 @@ Re-ranking takes 5-10 seconds on CPU. Options:
 
 ```bash
 # Run without re-ranking (faster)
-mpy-review-rag review --diff code.patch
+mpy-reviewer review --diff code.patch
 
 # Or use on GPU (1-2 seconds)
 # (if GPU is available and torch CUDA is installed)
@@ -250,15 +250,15 @@ mpy-review-rag review --diff code.patch
 
 | Want | Command |
 |------|---------|
-| **Fastest** | `mpy-review-rag review --diff code.patch` |
-| **Balanced** | `mpy-review-rag review --diff code.patch --codebase` |
-| **Best Quality** | `mpy-review-rag review --diff code.patch --codebase --rerank` |
-| **Full Prompt** | `mpy-review-rag review --diff code.patch --codebase --rerank --output prompt` |
+| **Fastest** | `mpy-reviewer review --diff code.patch` |
+| **Balanced** | `mpy-reviewer review --diff code.patch --codebase` |
+| **Best Quality** | `mpy-reviewer review --diff code.patch --codebase --rerank` |
+| **Full Prompt** | `mpy-reviewer review --diff code.patch --codebase --rerank --output prompt` |
 
 ## System Statistics
 
 ```bash
-mpy-review-rag stats
+mpy-reviewer stats
 ```
 
 Should show:
@@ -289,12 +289,12 @@ For more details, see:
 
 ```bash
 # Show all commands
-mpy-review-rag --help
+mpy-reviewer --help
 
 # Show command-specific help
-mpy-review-rag review --help
-mpy-review-rag search --help
-mpy-review-rag eval --help
+mpy-reviewer review --help
+mpy-reviewer search --help
+mpy-reviewer eval --help
 
 # Check installation
 python3 -c "import rag; print(rag.__version__)"
@@ -311,7 +311,7 @@ To use this as a Claude Code skill with natural language:
 mkdir -p ~/.claude/skills/mpy-review
 
 # Link the SKILL.md file
-ln -s /home/anl/mpy/dpgeorge-review-db/skill/SKILL.md \
+ln -s /home/anl/mpy/mpy-reviewer/skill/SKILL.md \
       ~/.claude/skills/mpy-review/SKILL.md
 ```
 
@@ -344,7 +344,7 @@ Can you review my changes to py/gc.c?
 
 # Find review examples
 Can you find examples of memory allocation reviews?
-What has dpgeorge said about error handling?
+What has the lead maintainer said about error handling?
 ```
 
 Claude interprets your request, runs the appropriate git/search commands, and provides review feedback.
@@ -353,4 +353,4 @@ See `skill/SKILL.md` for the agent's complete instructions.
 
 ---
 
-**Next**: Build the index with `mpy-review-rag index --force` and try the examples above!
+**Next**: Build the index with `mpy-reviewer index --force` and try the examples above!

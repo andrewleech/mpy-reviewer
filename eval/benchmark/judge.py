@@ -65,7 +65,7 @@ Rate each criterion from 1 to 5:
 - **5**: Every suggestion is specific, references exact code, and explains what to do
 
 ### 5. Style Fidelity (1-5)
-How well does this match dpgeorge's review style?
+How well does this match the lead maintainer's review style?
 - **1**: Overly verbose, uses filler/compliments, corporate tone, or generic advice
 - **3**: Somewhat technical and direct, but occasionally padded or generic
 - **5**: Direct, terse, technically precise. No filler. Points are concise and specific.
@@ -204,7 +204,7 @@ def score_single_review(variant_id: str, pr_number: int, run_num: int, force: bo
     # Build judge prompt
     prompt = f"""You are evaluating a code review of MicroPython pull request #{pr_number}.
 
-The reviewer was asked to review the following diff and provide dpgeorge-style feedback.
+The reviewer was asked to review the following diff and provide maintainer-style feedback.
 
 ## PR Diff
 

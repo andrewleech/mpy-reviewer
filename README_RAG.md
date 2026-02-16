@@ -1,12 +1,12 @@
-# MicroPython dpgeorge-Style Review RAG System
+# MicroPython Review RAG System
 
-A production-quality retrieval-augmented generation (RAG) system for generating code reviews in dpgeorge's style using 22,805 of his MicroPython review comments.
+A retrieval-augmented generation (RAG) system for generating code reviews matching the MicroPython lead maintainer's style using 22,805 historical review comments.
 
 ## Overview
 
-This system enables AI models (like Claude) to generate high-quality code reviews that match dpgeorge's technical standards, communication style, and MicroPython expertise by:
+This system enables AI models (like Claude) to generate high-quality code reviews that match the lead maintainer's technical standards, communication style, and MicroPython expertise by:
 
-1. **Retrieving relevant past reviews** - Finding similar dpgeorge reviews from a 18,614-comment database
+1. **Retrieving relevant past reviews** - Finding similar historical reviews from a 18,614-comment database
 2. **Augmenting with codebase context** - Including relevant MicroPython source code definitions
 3. **Assembling rich prompts** - Combining style guide, examples, and context into coherent instructions
 
@@ -27,7 +27,7 @@ source ~/.cargo/env
 
 ```bash
 # Clone/navigate to project
-cd /home/corona/mpy/dpgeorge-review-db
+cd /home/anl/mpy/mpy-reviewer
 
 # Create virtual environment
 python3 -m venv venv
@@ -47,20 +47,20 @@ cargo install codanna --all-features
 
 ```bash
 # One-time setup: build embedding index (takes 2-3 hours on CPU, 15-20 min on GPU)
-mpy-review-rag index --force --batch-size 32
+mpy-reviewer index --force --batch-size 32
 ```
 
 ### Generate Review Context
 
 ```bash
 # Get review examples for a code diff
-mpy-review-rag review --diff my_changes.patch
+mpy-reviewer review --diff my_changes.patch
 
 # Get full prompt for Claude
-mpy-review-rag review --diff my_changes.patch --output prompt
+mpy-reviewer review --diff my_changes.patch --output prompt
 
 # Include codebase context and re-ranking
-mpy-review-rag review --diff my_changes.patch --codebase --rerank --output prompt
+mpy-reviewer review --diff my_changes.patch --codebase --rerank --output prompt
 ```
 
 ## System Architecture
@@ -121,13 +121,13 @@ Pattern Matching
 
 ```
 Style Guide
-    ├─ dpgeorge's review principles
+    ├─ Review principles
     ├─ Feedback severity calibration
     └─ Communication style examples
     ↓
 Review Examples (5-10)
     ├─ Code context (diff)
-    ├─ dpgeorge's feedback
+    ├─ Review feedback
     └─ Domain/severity tags
     ↓
 Codebase Context (optional)
@@ -163,7 +163,7 @@ Task Instructions
 
 | Path | Contents | Size |
 |------|----------|------|
-| `data/dpgeorge_reviews.db` | SQLite database: 18,614 comments | 29 MB |
+| `data/reviews.db` | SQLite database: 18,614 comments | 29 MB |
 | `data/lance/` | LanceDB vector index | ~80 MB |
 
 ### Key Models
@@ -202,58 +202,58 @@ Categorizations with 13-field schema:
 
 ```bash
 # Generate context for a diff file
-mpy-review-rag review --diff changes.patch
+mpy-reviewer review --diff changes.patch
 
 # Generate context for GitHub PR
-mpy-review-rag review --pr 12345
+mpy-reviewer review --pr 12345
 
 # Read diff from stdin
-cat diff.patch | mpy-review-rag review --stdin
+cat diff.patch | mpy-reviewer review --stdin
 
 # Output options
-mpy-review-rag review --diff file.patch --output context  # (default)
-mpy-review-rag review --diff file.patch --output prompt   # Full prompt
-mpy-review-rag review --diff file.patch --output json     # Structured output
+mpy-reviewer review --diff file.patch --output context  # (default)
+mpy-reviewer review --diff file.patch --output prompt   # Full prompt
+mpy-reviewer review --diff file.patch --output json     # Structured output
 
 # Advanced options
-mpy-review-rag review --diff file.patch --rerank          # Use re-ranking
-mpy-review-rag review --diff file.patch --codebase        # Include codebase context
-mpy-review-rag review --diff file.patch -k 15             # Top 15 examples
+mpy-reviewer review --diff file.patch --rerank          # Use re-ranking
+mpy-reviewer review --diff file.patch --codebase        # Include codebase context
+mpy-reviewer review --diff file.patch -k 15             # Top 15 examples
 ```
 
 ### Index Commands
 
 ```bash
 # Build/rebuild index
-mpy-review-rag index --force --batch-size 32
+mpy-reviewer index --force --batch-size 32
 
 # Show index statistics
-mpy-review-rag stats
+mpy-reviewer stats
 ```
 
 ### Search Commands
 
 ```bash
 # Simple semantic search
-mpy-review-rag search "memory allocation error"
+mpy-reviewer search "memory allocation error"
 
 # Search with filters
-mpy-review-rag search "pointer arithmetic" --domain correctness
-mpy-review-rag search "naming convention" --severity nitpick
-mpy-review-rag search "error handling" --component py_core --style-only
+mpy-reviewer search "pointer arithmetic" --domain correctness
+mpy-reviewer search "naming convention" --severity nitpick
+mpy-reviewer search "error handling" --component py_core --style-only
 ```
 
 ### Evaluation Commands
 
 ```bash
 # Build evaluation dataset (sample 50 diverse PRs)
-mpy-review-rag eval build-dataset --count 50 --stratify domain --output eval/dataset.json
+mpy-reviewer eval build-dataset --count 50 --stratify domain --output eval/dataset.json
 
 # Evaluate retrieval quality
-mpy-review-rag eval retrieval --dataset eval/dataset.json --output eval/results
+mpy-reviewer eval retrieval --dataset eval/dataset.json --output eval/results
 
 # Show metrics
-mpy-review-rag eval metrics --results-dir eval/results
+mpy-reviewer eval metrics --results-dir eval/results
 ```
 
 ## Performance Characteristics
@@ -283,7 +283,7 @@ Edit configuration in `rag/config.py`:
 @dataclass
 class Config:
     # Paths
-    sqlite_db_path: Path  # Default: data/dpgeorge_reviews.db
+    sqlite_db_path: Path  # Default: data/reviews.db
     lance_db_path: Path  # Default: data/lance/
     micropython_repo_path: Path  # Default: /home/corona/mpy/review
 
@@ -310,7 +310,7 @@ To use as a Claude Code skill with natural language interface:
 1. **Install the skill:**
    ```bash
    mkdir -p ~/.claude/skills/mpy-review
-   ln -s /home/anl/mpy/dpgeorge-review-db/skill/SKILL.md \
+   ln -s /home/anl/mpy/mpy-reviewer/skill/SKILL.md \
          ~/.claude/skills/mpy-review/SKILL.md
    ```
 
@@ -365,7 +365,7 @@ response = client.messages.create(
 from rag.evaluator import DatasetBuilder
 from pathlib import Path
 
-builder = DatasetBuilder("data/dpgeorge_reviews.db")
+builder = DatasetBuilder("data/reviews.db")
 dataset = builder.build_dataset(
     sample_size=100,
     stratify_by="domain",  # or "severity", "component"
@@ -379,7 +379,7 @@ dataset = builder.build_dataset(
 from rag.evaluator import EvaluationPipeline
 from rag.retriever import get_retriever
 
-pipeline = EvaluationPipeline("data/dpgeorge_reviews.db")
+pipeline = EvaluationPipeline("data/reviews.db")
 results = pipeline.run_evaluation(
     get_retriever(),
     sample_size=50,
@@ -395,14 +395,14 @@ print(results["summary"])
 ### Index Not Built
 ```bash
 source venv/bin/activate
-mpy-review-rag index --force --batch-size 16
+mpy-reviewer index --force --batch-size 16
 ```
 
 ### Models Not Downloaded
 Models auto-download on first use (~2GB). To pre-download:
 ```bash
 source venv/bin/activate
-mpy-review-rag stats
+mpy-reviewer stats
 ```
 
 ### Memory Issues
@@ -418,13 +418,13 @@ mpy-review-rag stats
 ### Database Locked
 ```bash
 # Check for running processes
-ps aux | grep mpy-review-rag
+ps aux | grep mpy-reviewer
 
 # Kill if needed
-pkill -f "mpy-review-rag index"
+pkill -f "mpy-reviewer index"
 
 # Reset journal file if stuck
-rm -f data/dpgeorge_reviews.db-journal
+rm -f data/reviews.db-journal
 ```
 
 ## Development Guide
@@ -505,7 +505,7 @@ for r in results:
 4. GitHub Actions integration
 
 ### Potential Improvements
-1. Fine-tune Jina embeddings on dpgeorge reviews
+1. Fine-tune Jina embeddings on historical reviews
 2. Learn fusion weights instead of RRF
 3. Add code clone detection
 4. Implement change-impact analysis
@@ -516,25 +516,25 @@ for r in results:
 ### For Speed (Trade quality)
 ```bash
 # Skip re-ranking
-mpy-review-rag review --diff file.patch --output prompt
+mpy-reviewer review --diff file.patch --output prompt
 
 # Reduce top-k
-mpy-review-rag review --diff file.patch -k 5
+mpy-reviewer review --diff file.patch -k 5
 
 # Smaller batch size for indexing
-mpy-review-rag index --batch-size 8
+mpy-reviewer index --batch-size 8
 ```
 
 ### For Quality (Trade speed)
 ```bash
 # Use re-ranking
-mpy-review-rag review --diff file.patch --rerank
+mpy-reviewer review --diff file.patch --rerank
 
 # Include codebase context
-mpy-review-rag review --diff file.patch --codebase
+mpy-reviewer review --diff file.patch --codebase
 
 # More examples
-mpy-review-rag review --diff file.patch -k 15
+mpy-reviewer review --diff file.patch -k 15
 ```
 
 ## Citation
@@ -542,8 +542,8 @@ mpy-review-rag review --diff file.patch -k 15
 If you use this system, please cite:
 
 ```bibtex
-@misc{dpgeorge_review_rag,
-  title={dpgeorge-Style Code Review RAG System},
+@misc{mpy_review_rag,
+  title={MicroPython Code Review RAG System},
   author={Your Name},
   year={2025},
   url={https://github.com/anthropics/claude-code}

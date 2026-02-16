@@ -1,14 +1,14 @@
-# dpgeorge Review Database - Structure and Maintenance
+# MicroPython Review Database - Structure and Maintenance
 
 ## Overview
-This database contains all review comments from Damien George (dpgeorge), the creator and lead maintainer of MicroPython, across 5,542 PRs with 18,614 categorized comments.
+This database contains all review comments from the MicroPython lead maintainer across 5,542 PRs with 18,614 categorized comments.
 
 ## Database Schema
 
 ### Raw Data Tables
 
 #### `prs`
-Stores metadata about each PR reviewed by dpgeorge.
+Stores metadata about each PR reviewed by the lead maintainer.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -105,7 +105,7 @@ The main categorization table with 13 fields per comment.
 | domain_id | INTEGER | Foreign key to domains |
 | theme | TEXT | Specific issue description |
 | severity | TEXT | 'blocking', 'suggestion', or 'nitpick' |
-| is_style_example | BOOLEAN | 1 if exemplifies dpgeorge's style |
+| is_style_example | BOOLEAN | 1 if exemplifies the lead maintainer's style |
 | categorized_at | TEXT | ISO 8601 timestamp of categorization |
 | component | TEXT | 'py_core', 'extmod', 'port_specific', etc. |
 | port | TEXT | Port name if port-specific (NULL otherwise) |
@@ -141,7 +141,7 @@ Key-value store for tracking data collection and processing state.
 The database was populated using `scripts/fetch_reviews.py`:
 
 1. **Fetch all merged PRs** from micropython/micropython repository
-2. **Filter PRs reviewed by dpgeorge** using GitHub API
+2. **Filter PRs reviewed by the lead maintainer** using GitHub API
 3. **For each PR, collect:**
    - PR metadata
    - Review comments (inline on code)
@@ -169,7 +169,7 @@ All 18,614 comments were categorized using `scripts/categorize_headless.py`:
 Update the database with new PRs since last sync:
 
 ```bash
-cd /home/corona/mpy/dpgeorge-review-db
+cd /home/anl/mpy/mpy-reviewer
 
 # Fetch new PRs and comments
 python3 scripts/fetch_reviews.py --update
@@ -187,9 +187,9 @@ Create a cron job or scheduled task:
 
 ```bash
 #!/bin/bash
-# Update dpgeorge review database weekly
+# Update MicroPython review database weekly
 
-cd /home/corona/mpy/dpgeorge-review-db
+cd /home/anl/mpy/mpy-reviewer
 
 # Fetch new data
 python3 scripts/fetch_reviews.py --update > logs/update_$(date +%Y%m%d).log 2>&1
@@ -201,7 +201,7 @@ python3 scripts/categorize_headless.py > logs/categorize_$(date +%Y%m%d).log 2>&
 python3 scripts/retry_failed.py --batch-size 1 --delay 3 >> logs/categorize_$(date +%Y%m%d).log 2>&1
 
 # Send notification
-echo "Database updated: $(python3 -c 'import sqlite3; print(sqlite3.connect(\"data/dpgeorge_reviews.db\").execute(\"SELECT COUNT(*) FROM comment_categories\").fetchone()[0])') total categorizations"
+echo "Database updated: $(python3 -c 'import sqlite3; print(sqlite3.connect(\"data/reviews.db\").execute(\"SELECT COUNT(*) FROM comment_categories\").fetchone()[0])') total categorizations"
 ```
 
 ### Option 3: Incremental Sync
@@ -232,7 +232,7 @@ python3 scripts/categorize_headless.py --auto-continue
 - `REVIEW_DATABASE_GUIDE.md` - This file
 
 ### Data
-- `data/dpgeorge_reviews.db` - Main SQLite database
+- `data/reviews.db` - Main SQLite database
 - `logs/` - Categorization and update logs
 
 ## Querying the Database
@@ -290,8 +290,8 @@ ORDER BY count DESC;
 ## Maintenance Notes
 
 ### Database Integrity
-- Always backup before major updates: `cp data/dpgeorge_reviews.db data/dpgeorge_reviews.db.backup`
-- Vacuum periodically: `sqlite3 data/dpgeorge_reviews.db "VACUUM;"`
+- Always backup before major updates: `cp data/reviews.db data/reviews.db.backup`
+- Vacuum periodically: `sqlite3 data/reviews.db "VACUUM;"`
 - Check for orphaned records: See `scripts/check_integrity.py`
 
 ### Categorization Quality

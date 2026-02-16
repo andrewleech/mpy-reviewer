@@ -1,4 +1,4 @@
-"""Configuration management for mpy-review-rag."""
+"""Configuration management for mpy-reviewer."""
 
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -39,7 +39,7 @@ class Config:
     def __post_init__(self):
         # Set default paths relative to project root
         if self.sqlite_db_path is None:
-            self.sqlite_db_path = self.project_root / "data" / "dpgeorge_reviews.db"
+            self.sqlite_db_path = self.project_root / "data" / "reviews.db"
         if self.lance_db_path is None:
             self.lance_db_path = self.project_root / "data" / "lance"
         if self.micropython_repo_path is None:

@@ -1,4 +1,4 @@
-"""MCP server for MicroPython dpgeorge review RAG system.
+"""MCP server for MicroPython review RAG system.
 
 Provides persistent access to the review database with warm model loading.
 Tools are designed for iterative use during a review session — call search_reviews
@@ -22,10 +22,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP(
-    "mpy-review-rag",
+    "mpy-reviewer",
     instructions=(
         "MicroPython code review RAG system backed by 18,614 categorized review "
-        "comments from dpgeorge (Damien George). Use review_diff or review_pr as "
+        "comments. Use review_diff or review_pr as "
         "the primary entry point for code review. Use search_reviews for targeted "
         "follow-up queries during a review (e.g. searching for memory allocation "
         "patterns, error handling examples). Use find_style_examples to calibrate "
@@ -81,7 +81,7 @@ def review_diff(
     top_k: int = 8,
     include_codebase: bool = False,
 ) -> dict:
-    """Review a code diff using dpgeorge's review patterns.
+    """Review a code diff using historical MicroPython review patterns.
 
     Primary entry point for code review. Accepts raw unified diff text,
     retrieves relevant past review examples, and returns both a formatted
@@ -138,7 +138,7 @@ def review_pr(
     top_k: int = 8,
     include_codebase: bool = False,
 ) -> dict:
-    """Review a GitHub PR by number using dpgeorge's review patterns.
+    """Review a GitHub PR by number using historical MicroPython review patterns.
 
     Fetches the PR diff from micropython/micropython via gh CLI, then
     retrieves relevant past review examples.
@@ -181,11 +181,11 @@ def search_reviews(
     component: Optional[str] = None,
     language_context: Optional[str] = None,
 ) -> dict:
-    """Search dpgeorge's review comments by semantic similarity with optional filters.
+    """Search review comments by semantic similarity with optional filters.
 
     Use for targeted follow-up queries during a review session. For example,
     after reviewing a diff, search for "memory allocation gc" to find specific
-    patterns dpgeorge flags around garbage collection.
+    patterns flagged around garbage collection.
 
     Filterable domains: correctness, code_style, api_design, memory, performance,
     portability, documentation, testing, security, architecture, build_system.
@@ -236,10 +236,10 @@ def find_style_examples(
     query: str = "",
     top_k: int = 10,
 ) -> dict:
-    """Find review comments that exemplify dpgeorge's communication style.
+    """Find review comments that exemplify the lead maintainer's communication style.
 
     Filtered to comments marked as style examples during categorization.
-    Use to calibrate tone and phrasing when generating dpgeorge-style reviews.
+    Use to calibrate tone and phrasing when generating reviews.
 
     Args:
         query: Optional search query to focus style examples (default: broad).
@@ -285,7 +285,7 @@ def get_pr_review_history(
     pr_number: int,
     max_comments: int = 20,
 ) -> dict:
-    """Get dpgeorge's full review history for a specific PR.
+    """Get full review history for a specific PR.
 
     Retrieves all review comments, issue comments, and review verdicts
     for a PR, organized as conversation threads where possible.

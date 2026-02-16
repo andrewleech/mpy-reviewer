@@ -1,4 +1,4 @@
-"""Multi-stage hybrid retrieval for dpgeorge reviews."""
+"""Multi-stage hybrid retrieval for MicroPython reviews."""
 
 from typing import List, Dict, Any, Optional
 import logging

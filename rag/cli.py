@@ -1,4 +1,4 @@
-"""Command-line interface for mpy-review-rag."""
+"""Command-line interface for mpy-reviewer."""
 
 import sys
 import json
@@ -27,7 +27,7 @@ def setup_logging(verbose: bool):
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
 @click.pass_context
 def cli(ctx, verbose: bool):
-    """MicroPython Review RAG - dpgeorge-style code review assistant."""
+    """MicroPython Review RAG - code review assistant."""
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
     setup_logging(verbose)
@@ -172,7 +172,7 @@ def review(
 ):
     """Generate review context for a code diff.
 
-    Retrieves relevant past dpgeorge reviews and codebase context.
+    Retrieves relevant past reviews and codebase context.
     """
     from .retriever import get_retriever
     from .reranker import get_reranker
@@ -261,14 +261,14 @@ def review(
             click.echo(prompt)
 
         else:  # context
-            click.echo("# Relevant Past Reviews by dpgeorge\n")
+            click.echo("# Relevant Past Reviews\n")
             for i, result in enumerate(results[:top_k], 1):
                 click.echo(f"## Example {i}: {result.get('domain', 'N/A')} - {result.get('severity', 'N/A')}")
                 if result.get("diff_hunk"):
                     click.echo("```diff")
                     click.echo(result["diff_hunk"][:1000])
                     click.echo("```")
-                click.echo(f"\ndpgeorge's comment:\n> {result['body']}\n")
+                click.echo(f"\nComment:\n> {result['body']}\n")
                 click.echo("---\n")
 
 

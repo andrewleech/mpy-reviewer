@@ -6,7 +6,7 @@ Migrate database schema to support enhanced categorization fields.
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent.parent / "data" / "dpgeorge_reviews.db"
+DB_PATH = Path(__file__).parent.parent / "data" / "reviews.db"
 
 def migrate():
     conn = sqlite3.connect(DB_PATH)

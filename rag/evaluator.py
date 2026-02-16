@@ -1,4 +1,4 @@
-"""Evaluation framework for dpgeorge review RAG system."""
+"""Evaluation framework for MicroPython review RAG system."""
 
 import json
 import logging

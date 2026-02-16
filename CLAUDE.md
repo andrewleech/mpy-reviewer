@@ -1,13 +1,13 @@
-# dpgeorge-review-db CLAUDE.md
+# mpy-reviewer CLAUDE.md
 
-This file provides context for AI coding agents working on the dpgeorge Review Database project.
+This file provides context for AI coding agents working on the MicroPython Review Database project.
 
 ## Project Overview
 
-This project creates a queryable RAG (Retrieval-Augmented Generation) system of Damien George's (dpgeorge) code review patterns from the micropython/micropython GitHub repository. The goal is to enable AI-assisted PR reviews that match dpgeorge's technical standards and communication style.
+This project creates a queryable RAG (Retrieval-Augmented Generation) system of the MicroPython lead maintainer's code review patterns from the micropython/micropython GitHub repository. The goal is to enable AI-assisted PR reviews that match the lead maintainer's technical standards and communication style.
 
 **Key Features:**
-- Collect all review comments from dpgeorge via GitHub API
+- Collect all review comments from the lead maintainer via GitHub API
 - Categorize comments using 13-field enhanced schema via Claude CLI
 - Build vector index with CodeRankEmbed embeddings for semantic search
 - Hybrid retrieval (dense + full-text) with metadata filtering and heuristic boosting
@@ -29,11 +29,11 @@ This project creates a queryable RAG (Retrieval-Augmented Generation) system of 
 ## Directory Structure
 
 ```
-dpgeorge-review-db/
+mpy-reviewer/
 ├── data/
-│   ├── dpgeorge_reviews.db        # SQLite database (source of truth)
+│   ├── reviews.db                 # SQLite database (source of truth)
 │   └── lance/                     # LanceDB vector index
-│       └── dpgeorge_reviews.lance/
+│       └── reviews.lance/
 ├── mcp_server.py                  # FastMCP server (stdio transport)
 ├── rag/                           # RAG Python package
 │   ├── __init__.py
@@ -84,7 +84,7 @@ source ~/.cargo/env
 ### Setup Environment
 
 ```bash
-cd /home/anl/mpy/dpgeorge-review-db
+cd /home/anl/mpy/mpy-reviewer
 
 # Create and activate virtual environment
 python3 -m venv venv
@@ -106,22 +106,22 @@ cargo install codanna --all-features
 
 ```bash
 # Show index statistics
-mpy-review-rag stats
+mpy-reviewer stats
 
 # Search for similar reviews
-mpy-review-rag search "memory allocation error handling" -k 5
+mpy-reviewer search "memory allocation error handling" -k 5
 
 # Search with filters
-mpy-review-rag search "GPIO configuration" --component port_specific --domain api_design
+mpy-reviewer search "GPIO configuration" --component port_specific --domain api_design
 
 # Generate review context for a PR
-mpy-review-rag review --pr 17321
+mpy-reviewer review --pr 17321
 
 # Generate review context from a diff file
-mpy-review-rag review --diff path/to/changes.diff
+mpy-reviewer review --diff path/to/changes.diff
 
 # Output as JSON for programmatic use
-mpy-review-rag search "type checking" --json
+mpy-reviewer search "type checking" --json
 ```
 
 ### Using as a Claude Code Skill
@@ -135,7 +135,7 @@ The system can be installed as a Claude Code skill for conversational access wit
 mkdir -p ~/.claude/skills/mpy-review
 
 # Link the SKILL.md file
-ln -s /home/anl/mpy/dpgeorge-review-db/skill/SKILL.md \
+ln -s /home/anl/mpy/mpy-reviewer/skill/SKILL.md \
       ~/.claude/skills/mpy-review/SKILL.md
 ```
 
@@ -160,7 +160,7 @@ Can you find examples of memory allocation reviews?
 Can you /mpy-review find examples of memory allocation?
 
 # Get quick context
-What has dpgeorge said about error handling?
+What has the lead maintainer said about error handling?
 ```
 
 **Note:** Skills are invoked BY Claude, not directly by users. You ask Claude to use the skill, and Claude runs the appropriate commands.
@@ -170,7 +170,7 @@ What has dpgeorge said about error handling?
 - Agent interprets intent and runs appropriate git/search commands
 - Semantic search across 18,614 categorized review comments
 - Automatic diff generation for commits, branches, files
-- Generates dpgeorge-style review feedback
+- Generates maintainer-style review feedback
 
 **How it works:**
 The skill agent parses your natural language request, runs the appropriate git commands to generate diffs, pipes them to the review tool, and presents the results conversationally.
@@ -293,17 +293,17 @@ To extend the database with newer review data:
 ### Step 1: Collect New Reviews from GitHub
 
 ```bash
-cd /home/anl/mpy/dpgeorge-review-db
+cd /home/anl/mpy/mpy-reviewer
 source venv/bin/activate
 
 # Run collection (incremental if previous sync exists)
 python scripts/collect.py
 
 # This will:
-# - Search for PRs where dpgeorge commented
+# - Search for PRs where the lead maintainer commented
 # - Use year-based pagination to work around GitHub's 1000-result limit
 # - Fetch PR details, review comments, issue comments, and reviews
-# - Store in data/dpgeorge_reviews.db
+# - Store in data/reviews.db
 # - Checkpoint progress for resume capability
 
 # Time: ~20-30 min for full collection, faster for incremental
@@ -322,7 +322,7 @@ tail -f logs/categorization_*.log
 # Check categorization status
 python -c "
 import sqlite3
-conn = sqlite3.connect('data/dpgeorge_reviews.db')
+conn = sqlite3.connect('data/reviews.db')
 total = conn.execute('SELECT COUNT(*) FROM review_comments').fetchone()[0]
 total += conn.execute('SELECT COUNT(*) FROM issue_comments').fetchone()[0]
 total += conn.execute('SELECT COUNT(*) FROM reviews WHERE body IS NOT NULL').fetchone()[0]
@@ -345,7 +345,7 @@ import logging
 import gc
 import os
 
-os.chdir('/home/anl/mpy/dpgeorge-review-db')
+os.chdir('/home/anl/mpy/mpy-reviewer')
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logging.getLogger('transformers').setLevel(logging.WARNING)
@@ -362,7 +362,7 @@ db = lancedb.connect(str(config.lance_db_path))
 
 # Check for existing index
 try:
-    table = db.open_table("dpgeorge_reviews")
+    table = db.open_table("reviews")
     existing = table.to_pandas()[['comment_id', 'comment_type']]
     indexed_keys = set(zip(existing['comment_id'], existing['comment_type']))
     logger.info(f"Resuming: {len(indexed_keys)} records already indexed")
@@ -403,7 +403,7 @@ for comment in tqdm(iter_all_comments(conn), total=total, desc="Indexing"):
             record["vector"] = embeddings[i].tolist()
 
         if table is None:
-            table = db.create_table("dpgeorge_reviews", batch_records, mode="overwrite")
+            table = db.create_table("reviews", batch_records, mode="overwrite")
         else:
             table.add(batch_records)
 
@@ -425,7 +425,7 @@ if batch_texts:
     for i, record in enumerate(batch_records):
         record["vector"] = embeddings[i].tolist()
     if table is None:
-        table = db.create_table("dpgeorge_reviews", batch_records, mode="overwrite")
+        table = db.create_table("reviews", batch_records, mode="overwrite")
     else:
         table.add(batch_records)
     processed += len(batch_records)
@@ -462,16 +462,16 @@ tail -f logs/index_build.log
 
 ```bash
 # Check index status
-mpy-review-rag stats
+mpy-reviewer stats
 
 # Test a search
-mpy-review-rag search "memory allocation" -k 5
+mpy-reviewer search "memory allocation" -k 5
 
 # Python verification
 python -c "
 import lancedb
 db = lancedb.connect('data/lance')
-t = db.open_table('dpgeorge_reviews')
+t = db.open_table('reviews')
 print(f'Total records: {len(t)}')
 print(f'Schema: {[f.name for f in t.schema]}')
 df = t.to_pandas()
@@ -482,7 +482,7 @@ print(df['domain'].value_counts().head(5))
 
 ## Database Schema
 
-### SQLite Tables (data/dpgeorge_reviews.db)
+### SQLite Tables (data/reviews.db)
 
 **prs** - Pull request metadata
 - id, number, title, body, author, state, created_at, merged_at, etc.
@@ -500,7 +500,7 @@ print(df['domain'].value_counts().head(5))
 - Links to comments via comment_id + comment_type
 - See Categorization Fields below
 
-### LanceDB Schema (data/lance/dpgeorge_reviews.lance)
+### LanceDB Schema (data/lance/reviews.lance)
 
 All categorization fields plus:
 - `vector`: 768-dimensional Jina embedding
@@ -512,7 +512,7 @@ All categorization fields plus:
 - `domain`: code_style, memory, error_handling, api_design, performance, portability, documentation, testing, security, architecture, build_system, correctness
 - `theme`: Concise description of specific issue/pattern
 - `severity`: blocking, suggestion, nitpick
-- `is_style_example`: Boolean - demonstrates dpgeorge's communication style
+- `is_style_example`: Boolean - demonstrates the lead maintainer's communication style
 
 **Enhanced Fields:**
 - `component`: py_core, extmod, port_specific, drivers, tools, tests, docs, build_system, examples
@@ -619,7 +619,7 @@ python scripts/add_fts_index.py
 
 This adds the FTS index to the existing table without rebuilding embeddings (takes ~5 seconds).
 
-**Note:** `scripts/build_index_resume.py` and `mpy-review-rag index` now automatically create the FTS index, so this should only be needed for indices built with older versions.
+**Note:** `scripts/build_index_resume.py` and `mpy-reviewer index` now automatically create the FTS index, so this should only be needed for indices built with older versions.
 
 ### Claude CLI Categorization Errors
 
@@ -684,7 +684,7 @@ Query Text
 | `rag/retriever.py` | Hybrid dense+FTS search with heuristic boosting |
 | `rag/graph_expander.py` | Reply chain, PR sibling, and file-level expansion |
 | `rag/prompt_builder.py` | Data-driven style guide and prompt assembly |
-| `rag/cli.py` | `mpy-review-rag` command-line interface |
+| `rag/cli.py` | `mpy-reviewer` command-line interface |
 | `rag/usage_logger.py` | Usage tracking and performance logging |
 | `rag/config.py` | Paths, model settings, retrieval parameters |
 | `scripts/collect.py` | GitHub API → SQLite collection |

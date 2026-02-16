@@ -1,21 +1,21 @@
-# dpgeorge Review Database
+# MicroPython Review Database
 
-A comprehensive database and analysis system for Damien George's (dpgeorge) code review feedback on the MicroPython repository.
+A database and analysis system for the MicroPython lead maintainer's code review feedback on the MicroPython repository.
 
 ## Project Goal
 
-Create a queryable knowledge base of dpgeorge's PR review patterns and style that can:
+Create a queryable knowledge base of historical MicroPython PR review patterns and style that can:
 1. **Guide AI-assisted PR reviews** - Find relevant past feedback when reviewing new PRs
 2. **Learn review patterns** - Identify recurring best practices and common issues
-3. **Match writing style** - Replicate dpgeorge's direct, terse, technical communication style
+3. **Match writing style** - Replicate the lead maintainer's direct, terse, technical communication style
 4. **Provide context-aware guidance** - Search by component, port, subsystem, concern type, etc.
 
 ## Why This Matters
 
 When reviewing MicroPython PRs, an AI assistant needs to:
-- Apply the same technical standards dpgeorge uses (memory safety, portability, API design)
+- Apply the same technical standards the lead maintainer uses (memory safety, portability, API design)
 - Match the project's coding conventions and patterns
-- Communicate in dpgeorge's characteristic style (direct, technical, no fluff)
+- Communicate in the lead maintainer's characteristic style (direct, technical, no fluff)
 - Find relevant precedents for similar code patterns or issues
 - Understand domain-specific concerns (embedded systems, microcontrollers, resource constraints)
 
@@ -30,7 +30,7 @@ When reviewing MicroPython PRs, an AI assistant needs to:
 ✅ Full categorization run (18,614 categorized comments)
 ✅ Vector index built (LanceDB with Jina embeddings)
 ✅ Semantic search validated and working
-✅ CLI tool implementation (`mpy-review-rag`)
+✅ CLI tool implementation (`mpy-reviewer`)
 
 ### Future Enhancements
 - Style guide generation from categorized corpus
@@ -97,7 +97,7 @@ After analyzing 40 random samples, we developed a 13-field schema:
 - **domain**: Broad technical category (code_style, memory, error_handling, api_design, performance, portability, documentation, testing, security, architecture, build_system, correctness)
 - **theme**: Specific issue or pattern (e.g., "use simpler bool type", "struct alignment")
 - **severity**: blocking | suggestion | nitpick
-- **is_style_example**: Whether comment demonstrates dpgeorge's writing style well
+- **is_style_example**: Whether comment demonstrates the lead maintainer's writing style well
 
 ### Component Classification
 - **component**: Codebase area (py_core, extmod, port_specific, drivers, tools, tests, docs, build_system, examples)
@@ -150,7 +150,7 @@ From 40 sample categorizations, **17 patterns** (42%) were reusable across multi
 17. Provide examples rather than just descriptions
 18. Reference shared documentation instead of duplicating
 
-## dpgeorge's Communication Style
+## Lead Maintainer's Communication Style
 
 ### Characteristics
 - **Terse and direct** - no unnecessary words
@@ -253,7 +253,7 @@ WHERE subsystem = 'uart'
   AND port IS NOT NULL
   AND severity != 'nitpick'
 
--- Get dpgeorge's best style examples on testing
+-- Get best style examples on testing
 SELECT * FROM comment_categories
 WHERE domain = 'testing'
   AND is_style_example = 1
@@ -318,22 +318,22 @@ See `CLAUDE.md` for detailed workflow documentation.
 pip install -e .
 
 # Show index statistics
-mpy-review-rag stats
+mpy-reviewer stats
 
 # Search for relevant reviews (semantic search)
-mpy-review-rag search "memory allocation error handling" -k 10
+mpy-reviewer search "memory allocation error handling" -k 10
 
 # Search with filters
-mpy-review-rag search "GPIO pin configuration" --component port_specific --domain api_design
+mpy-reviewer search "GPIO pin configuration" --component port_specific --domain api_design
 
 # Generate review context for a PR
-mpy-review-rag review --pr 17321
+mpy-reviewer review --pr 17321
 
 # Generate review context from a diff file
-mpy-review-rag review --diff path/to/changes.diff
+mpy-reviewer review --diff path/to/changes.diff
 
 # Output as JSON for programmatic use
-mpy-review-rag search "type checking" --json
+mpy-reviewer search "type checking" --json
 ```
 
 ### Python API
@@ -361,13 +361,13 @@ results = find_similar(diff_text, top_k=8)
 ## Repository Structure
 
 ```
-dpgeorge-review-db/
+mpy-reviewer/
 ├── data/
-│   ├── dpgeorge_reviews.db          # SQLite database (source of truth)
+│   ├── reviews.db                   # SQLite database (source of truth)
 │   └── lance/                       # LanceDB vector index
-│       └── dpgeorge_reviews.lance/
+│       └── reviews.lance/
 ├── rag/                             # RAG Python package
-│   ├── cli.py                       # mpy-review-rag CLI
+│   ├── cli.py                       # CLI entry point
 │   ├── config.py                    # Configuration management
 │   ├── embeddings.py                # Jina embeddings wrapper
 │   ├── indexer.py                   # SQLite → LanceDB indexer

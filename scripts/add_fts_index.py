@@ -26,7 +26,7 @@ def add_fts_index():
     db = lancedb.connect(str(config.lance_db_path))
 
     try:
-        table = db.open_table("dpgeorge_reviews")
+        table = db.open_table("reviews")
         logger.info(f"Found table with {len(table)} records")
     except Exception as e:
         logger.error(f"Failed to open table: {e}")

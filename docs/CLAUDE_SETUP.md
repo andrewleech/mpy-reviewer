@@ -4,7 +4,7 @@ This document describes how to use the mpy-review skill with Claude Code, includ
 
 ## Overview
 
-The mpy-review skill provides dpgeorge-style code review assistance for MicroPython. It requires:
+The mpy-review skill provides code review assistance for MicroPython. It requires:
 - Python dependencies (installed via pip)
 - **codanna** for semantic code search (installed via cargo)
 
@@ -72,7 +72,7 @@ cargo install codanna --all-features
 ### 3. Install Python dependencies
 
 ```bash
-cd /home/anl/mpy/dpgeorge-review-db
+cd /home/anl/mpy/mpy-reviewer
 python3 -m venv venv
 source venv/bin/activate
 pip install -e .
@@ -85,7 +85,7 @@ pip install -e .
 codanna --version
 
 # Check Python package
-mpy-review-rag stats
+mpy-reviewer stats
 ```
 
 ## Using the Skill
@@ -149,7 +149,7 @@ source ~/.bashrc  # or source ~/.zshrc
 ### Python dependencies not installed
 
 ```bash
-cd /home/anl/mpy/dpgeorge-review-db
+cd /home/anl/mpy/mpy-reviewer
 source venv/bin/activate
 pip install -e .
 ```

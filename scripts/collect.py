@@ -17,7 +17,7 @@ from urllib.parse import quote
 
 REPO = "micropython/micropython"
 REVIEWER = "dpgeorge"
-DB_PATH = Path(__file__).parent.parent / "data" / "dpgeorge_reviews.db"
+DB_PATH = Path(__file__).parent.parent / "data" / "reviews.db"
 SCHEMA_PATH = Path(__file__).parent.parent / "schema.sql"
 
 # Rate limiting

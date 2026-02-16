@@ -1,4 +1,4 @@
-"""Index dpgeorge reviews into LanceDB."""
+"""Index reviews into LanceDB."""
 
 import json
 import sqlite3
@@ -202,7 +202,7 @@ def build_index(
 
     # Check if index exists
     lance_path = config.lance_db_path
-    table_exists = (lance_path / "dpgeorge_reviews.lance").exists()
+    table_exists = (lance_path / "reviews.lance").exists()
 
     if table_exists and not force:
         logger.warning(
@@ -256,7 +256,7 @@ def build_index(
                     if table is None:
                         # First chunk: create table
                         logger.info(f"Creating LanceDB table with {len(batch_records)} initial records")
-                        table = db.create_table("dpgeorge_reviews", batch_records, mode="overwrite")
+                        table = db.create_table("reviews", batch_records, mode="overwrite")
                         logger.info("Table created successfully")
                     else:
                         # Subsequent chunks: add to table
@@ -285,7 +285,7 @@ def build_index(
 
             if table is None:
                 logger.info(f"Creating LanceDB table with {len(batch_records)} records (final batch)")
-                table = db.create_table("dpgeorge_reviews", batch_records, mode="overwrite")
+                table = db.create_table("reviews", batch_records, mode="overwrite")
                 logger.info("Table created successfully")
             else:
                 logger.info(f"Adding final {len(batch_records)} records to table")
@@ -315,7 +315,7 @@ def get_lance_table():
     config = get_config()
     _check_index_model(config.lance_db_path, config.embedding_model)
     db = lancedb.connect(str(config.lance_db_path))
-    return db.open_table("dpgeorge_reviews")
+    return db.open_table("reviews")
 
 
 def index_stats() -> Dict[str, Any]:
@@ -328,7 +328,7 @@ def index_stats() -> Dict[str, Any]:
         "num_records": 0,
     }
 
-    lance_path = config.lance_db_path / "dpgeorge_reviews.lance"
+    lance_path = config.lance_db_path / "reviews.lance"
     if lance_path.exists():
         stats["exists"] = True
         try:

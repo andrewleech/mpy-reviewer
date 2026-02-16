@@ -1,4 +1,4 @@
--- dpgeorge Review Database Schema
+-- MicroPython Review Database Schema
 
 -- Pull requests
 CREATE TABLE IF NOT EXISTS prs (

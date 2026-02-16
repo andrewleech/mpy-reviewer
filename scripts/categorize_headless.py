@@ -15,7 +15,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent.parent / "data" / "dpgeorge_reviews.db"
+DB_PATH = Path(__file__).parent.parent / "data" / "reviews.db"
 BATCH_SIZE = 10  # Reduced from 20 to avoid timeouts
 MAX_BUDGET = "50.00"  # $50 max spend (increased from $5)
 TIMEOUT_SECONDS = 300  # Increased to 300s to allow Claude to read large files

@@ -66,7 +66,7 @@ def build_index_with_resume(
 
     # Check for existing index
     try:
-        table = db.open_table("dpgeorge_reviews")
+        table = db.open_table("reviews")
         existing = table.to_pandas()[['comment_id', 'comment_type']]
         indexed_keys = set(zip(existing['comment_id'], existing['comment_type']))
         logger.info(f"Resuming: {len(indexed_keys)} records already indexed")
@@ -121,7 +121,7 @@ def build_index_with_resume(
 
             # Write to LanceDB
             if table is None:
-                table = db.create_table("dpgeorge_reviews", batch_records, mode="overwrite")
+                table = db.create_table("reviews", batch_records, mode="overwrite")
             else:
                 table.add(batch_records)
 
@@ -147,7 +147,7 @@ def build_index_with_resume(
             record["vector"] = embeddings[i].tolist()
 
         if table is None:
-            table = db.create_table("dpgeorge_reviews", batch_records, mode="overwrite")
+            table = db.create_table("reviews", batch_records, mode="overwrite")
         else:
             table.add(batch_records)
 

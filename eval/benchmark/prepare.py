@@ -142,7 +142,7 @@ def generate_expanded_diff(repo_dir: Path, merge_base: str, pr_number: int, file
 
 
 def generate_rag_prompt(diff_text: str, pr_number: int) -> str:
-    """Generate a RAG prompt using the existing mpy-review-rag pipeline.
+    """Generate a RAG prompt using the existing mpy-reviewer pipeline.
 
     This pipes the expanded diff through the review command to get
     style guide + examples + codebase context + diff + task instructions.

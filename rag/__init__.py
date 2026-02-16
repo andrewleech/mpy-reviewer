@@ -1,8 +1,8 @@
 """
-MicroPython Review RAG - dpgeorge-style code review assistant.
+MicroPython Review RAG - code review assistant.
 
-A production-quality Dual RAG system that combines:
-1. Review RAG - Retrieve relevant dpgeorge review examples
+A Dual RAG system that combines:
+1. Review RAG - Retrieve relevant historical review examples
 2. Codebase RAG - Retrieve relevant MicroPython source context
 """
 
