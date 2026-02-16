@@ -16,9 +16,10 @@ class Config:
     micropython_repo_path: Path = field(default=None)
 
     # Embedding model
-    embedding_model: str = "jinaai/jina-embeddings-v2-base-code"
+    embedding_model: str = "nomic-ai/CodeRankEmbed"
     embedding_dim: int = 768
-    max_seq_length: int = 8192  # Jina v2 supports 8K tokens
+    max_seq_length: int = 8192
+    embedding_query_prefix: str = "Represent this query for searching relevant code: "
 
     # Device
     device: str = field(default=None)

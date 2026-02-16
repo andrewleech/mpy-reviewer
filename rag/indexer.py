@@ -1,5 +1,6 @@
 """Index dpgeorge reviews into LanceDB."""
 
+import json
 import sqlite3
 import logging
 from typing import Iterator, Dict, Any, Optional
@@ -13,6 +14,33 @@ from .config import get_config
 from .embeddings import get_embedder
 
 logger = logging.getLogger(__name__)
+
+_INDEX_META_FILE = "index_meta.json"
+
+
+def _write_index_meta(lance_path: Path, model_name: str, record_count: int) -> None:
+    """Write embedding model metadata alongside the index."""
+    meta = {"embedding_model": model_name, "record_count": record_count}
+    (lance_path / _INDEX_META_FILE).write_text(json.dumps(meta))
+
+
+def _check_index_model(lance_path: Path, expected_model: str) -> None:
+    """Warn if the index was built with a different embedding model."""
+    meta_path = lance_path / _INDEX_META_FILE
+    if not meta_path.exists():
+        logger.warning(
+            "No index metadata found — cannot verify embedding model compatibility. "
+            "If search quality is poor, rebuild the index with: python scripts/build_index_resume.py"
+        )
+        return
+    meta = json.loads(meta_path.read_text())
+    index_model = meta.get("embedding_model", "unknown")
+    if index_model != expected_model:
+        logger.warning(
+            f"Embedding model mismatch: index was built with '{index_model}' "
+            f"but config specifies '{expected_model}'. Retrieval quality will be "
+            f"degraded. Rebuild the index with: python scripts/build_index_resume.py"
+        )
 
 
 def get_sqlite_connection() -> sqlite3.Connection:
@@ -214,7 +242,7 @@ def build_index(
             if len(batch_texts) >= batch_size:
                 logger.info(f"Processing batch of {len(batch_texts)} texts, total indexed so far: {total_indexed}")
                 try:
-                    embeddings = embedder.embed_batch(batch_texts)
+                    embeddings = embedder.embed_batch(batch_texts, is_query=False)
                     logger.info(f"Successfully embedded {len(embeddings)} texts")
                 except Exception as e:
                     logger.error(f"Error embedding batch: {e}", exc_info=True)
@@ -250,7 +278,7 @@ def build_index(
     if batch_texts:
         logger.info(f"Processing final batch of {len(batch_texts)} texts")
         try:
-            embeddings = embedder.embed_batch(batch_texts)
+            embeddings = embedder.embed_batch(batch_texts, is_query=False)
             logger.info(f"Successfully embedded {len(embeddings)} final texts")
             for i, record in enumerate(batch_records):
                 record["vector"] = embeddings[i].tolist()
@@ -273,6 +301,7 @@ def build_index(
     if table is not None:
         logger.info("Creating full-text search index")
         table.create_fts_index("body", replace=True)
+        _write_index_meta(lance_path, config.embedding_model, total_indexed)
         logger.info("Index built successfully")
     else:
         logger.warning("No records to index")
@@ -284,6 +313,7 @@ def build_index(
 def get_lance_table():
     """Get the LanceDB table for querying."""
     config = get_config()
+    _check_index_model(config.lance_db_path, config.embedding_model)
     db = lancedb.connect(str(config.lance_db_path))
     return db.open_table("dpgeorge_reviews")
 
