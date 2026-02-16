@@ -9,18 +9,22 @@ This project creates a queryable RAG (Retrieval-Augmented Generation) system of 
 **Key Features:**
 - Collect all review comments from dpgeorge via GitHub API
 - Categorize comments using 13-field enhanced schema via Claude CLI
-- Build vector index with Jina embeddings for semantic search
-- Hybrid retrieval (dense + full-text) with metadata filtering
+- Build vector index with CodeRankEmbed embeddings for semantic search
+- Hybrid retrieval (dense + full-text) with metadata filtering and heuristic boosting
+- MCP server for persistent warm-model access during Claude Code sessions
 - CLI for searching and generating review context
+- Graph-aware context expansion (reply chains, PR sibling comments, file-level aggregation)
 
 **Current Status:**
 - ✅ Data collection complete (22,805 comments from 5,542 PRs)
 - ✅ Categorization complete (18,614 categorized comments)
-- ✅ Vector index built (LanceDB with 768-dim Jina embeddings)
+- ✅ Vector index built (LanceDB with 768-dim embeddings)
 - ✅ Semantic search validated and working
 - ✅ CLI tools operational
-- ✅ Claude Code skill available
+- ✅ MCP server with 6 tools (review_diff, review_pr, search_reviews, find_style_examples, get_review_stats, get_pr_review_history)
+- ✅ Claude Code skill available (fallback for non-MCP sessions)
 - ✅ Usage logging and performance analysis enabled
+- ⚠️ Index rebuild required after embedding model change (CodeRankEmbed)
 
 ## Directory Structure
 
@@ -30,13 +34,15 @@ dpgeorge-review-db/
 │   ├── dpgeorge_reviews.db        # SQLite database (source of truth)
 │   └── lance/                     # LanceDB vector index
 │       └── dpgeorge_reviews.lance/
+├── mcp_server.py                  # FastMCP server (stdio transport)
 ├── rag/                           # RAG Python package
 │   ├── __init__.py
 │   ├── cli.py                     # Command-line interface
 │   ├── config.py                  # Configuration management
-│   ├── embeddings.py              # Jina embeddings wrapper
+│   ├── embeddings.py              # CodeRankEmbed embeddings wrapper
+│   ├── graph_expander.py          # Reply chain / PR context expansion
 │   ├── indexer.py                 # SQLite → LanceDB indexer
-│   ├── retriever.py               # Hybrid search implementation
+│   ├── retriever.py               # Hybrid search with heuristic boosting
 │   ├── reranker.py                # Cross-encoder re-ranking
 │   ├── codebase.py                # MicroPython codebase context
 │   ├── fusion.py                  # Rank fusion utilities
@@ -450,7 +456,7 @@ tail -f logs/index_build.log
 - Time: ~5 hours for 18,614 records on CPU (WSL2, 45GB RAM)
 - Memory: ~6GB peak usage with batch_size=4
 - Speed: Variable 2-13 items/sec depending on text length
-- Model: Jina Embeddings v2 Base Code (768 dimensions)
+- Model: CodeRankEmbed (768 dimensions, requires index rebuild)
 
 ### Step 4: Verify the Index
 
@@ -641,7 +647,7 @@ gh api rate_limit
 ```
 Query Text
     │
-    ├──► Dense Search (Jina embeddings → cosine similarity)
+    ├──► Dense Search (CodeRankEmbed → cosine similarity)
     │         └─► Top 100 candidates
     │
     ├──► Full-Text Search (LanceDB FTS on body field)
@@ -653,7 +659,13 @@ Query Text
     Reciprocal Rank Fusion (RRF k=60)
               │
               ▼
-    MMR Diversity Selection (balance domain/severity)
+    Heuristic Boosts (file-path affinity, pattern/code-suggestion preference)
+              │
+              ▼
+    MMR Diversity Selection (severity constraints + domain diversity)
+              │
+              ▼
+    Graph Expansion (reply chains attached as thread metadata)
               │
               ▼
     Optional: Cross-Encoder Re-ranking (BGE-reranker-large)
@@ -666,9 +678,12 @@ Query Text
 
 | File | Purpose |
 |------|---------|
+| `mcp_server.py` | FastMCP server (6 tools, stdio transport) |
 | `rag/indexer.py` | SQLite → LanceDB vector index builder |
-| `rag/embeddings.py` | Jina v2 Base Code embeddings wrapper |
-| `rag/retriever.py` | Hybrid dense+FTS search with RRF fusion |
+| `rag/embeddings.py` | CodeRankEmbed embeddings (query/doc distinction) |
+| `rag/retriever.py` | Hybrid dense+FTS search with heuristic boosting |
+| `rag/graph_expander.py` | Reply chain, PR sibling, and file-level expansion |
+| `rag/prompt_builder.py` | Data-driven style guide and prompt assembly |
 | `rag/cli.py` | `mpy-review-rag` command-line interface |
 | `rag/usage_logger.py` | Usage tracking and performance logging |
 | `rag/config.py` | Paths, model settings, retrieval parameters |
