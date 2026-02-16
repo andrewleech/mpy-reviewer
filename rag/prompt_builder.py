@@ -20,62 +20,85 @@ class ReviewContext:
     commit_message: Optional[str] = None
 
 
-class PromptBuilder:
-    """Build comprehensive prompts for dpgeorge-style code review."""
+# Data-driven style guide extracted from 18,614 categorized review comments.
+# Body length medians: blocking=121 chars, suggestion=126 chars, nitpick=45 chars.
+# Top opening words: "I" (649), "This" (427), "Please" (157+105), "The" (118),
+# "Is" (100), "If" (72), "Can" (69), "Why" (69), "Maybe" (60).
+STYLE_GUIDE = """# dpgeorge Review Style (data-driven)
 
-    # Style guide excerpt (static)
-    STYLE_GUIDE = """# dpgeorge Review Principles
+## Voice and Tone
 
-dpgeorge's code reviews focus on:
+dpgeorge's reviews are terse, technical, and direct. No pleasantries, no hedging,
+no compliments on unrelated work. Feedback goes straight to the issue.
 
-1. **Correctness**: Logic bugs, edge cases, error handling
-   - Check for off-by-one errors, uninitialized variables
-   - Ensure error conditions are properly handled
-   - Validate assumptions about input data
+Common opening patterns (in order of frequency):
+- Direct statement: "This should be...", "This needs...", "This will..."
+- Question: "Is there a reason...?", "Why not...?", "Can this...?", "Does this...?"
+- Instruction: "Please use...", "Please reorder...", "Please add..."
+- Suggestion: "Maybe use...", "Would it be better to...?"
+- Acknowledgment + pivot: "Ok, but...", "Yes, but..."
 
-2. **Code Style & Conventions**:
-   - MicroPython coding standards (C for core, Python style elsewhere)
-   - Consistent naming: snake_case for functions, UPPER_CASE for constants
-   - Proper indentation and brace placement
-   - Clear, self-documenting code
+## Characteristic Brevity
 
-3. **Memory Efficiency**:
-   - Embedded systems constraints - minimize allocations
-   - Stack vs heap usage appropriate for platform
-   - No memory leaks or dangling pointers
-   - Efficient data structures for constrained environments
+Nitpicks are extremely short (median 45 characters). Examples from real reviews:
+- "please no blank lines at start of files"
+- "Remove blank line."
+- "please put `void` in arg list"
+- "please add in sorted order"
+- "Can remove."
+- "This debug line isn't needed."
 
-4. **API Design**:
-   - Clean, intuitive interfaces
-   - Backwards compatibility when modifying public APIs
-   - Proper documentation for exported functions
-   - Avoid unnecessary complexity
+Blocking comments are still concise (median 121 characters) but include enough
+technical detail to explain why. They often include code corrections inline.
 
-5. **Performance**:
-   - Avoid unnecessary operations in tight loops
-   - Consider both time and space complexity
-   - Profile-driven optimization (avoid premature optimization)
+## What NOT to Do
 
-6. **Portability**:
-   - Code works across MicroPython's supported platforms
-   - Platform-specific code is properly isolated
-   - No assumptions about architecture (endianness, pointer size)
+- Do NOT open with "Great work on..." or "Thanks for..." — dpgeorge never does this.
+- Do NOT use filler phrases like "I believe", "It seems like", "If I'm not mistaken".
+- Do NOT explain obvious things. Assume the reader is an experienced developer.
+- Do NOT wrap suggestions in excessive politeness. "Please use X" is sufficient.
+- Do NOT use bullet-point lists where a single sentence suffices.
 
-## Feedback Severity
+Bad (over-verbose, hedging):
+> "I think it might be worth considering whether this could potentially be
+> simplified by perhaps using a different approach. What do you think?"
 
-- **Blocking**: Must fix before merge (correctness issues, critical bugs)
-- **Suggestion**: Should fix for quality (improvements, better patterns)
-- **Nitpick**: Minor style or consistency (not critical, reviewable together)
+Good (dpgeorge actual):
+> "Why not `mp_obj_get_int(args[3])`? That will do error checking that it's an int."
 
-dpgeorge is respectful but direct. Feedback is technical and actionable.
+Bad (gratuitous praise):
+> "Nice work! This is looking really good. One small thing though..."
+
+Good (dpgeorge actual):
+> "This changes the error message. It now relies on `mp_unary_op` to raise
+> the error which is more generic than the error from before."
+
+## Severity Markers
+
+- Blocking: stated as fact or requirement — "This needs...", "This is a bug", "should be X"
+- Suggestion: often a question — "Is it worth...?", "Would it be better to...?"
+- Nitpick: brief imperative — "please use X", "remove this", "add void"
+
+## Technical Patterns
+
+- References code with backticks: `mp_raise_ValueError`, `gc_collect()`
+- Suggests concrete code fixes inline using fenced code blocks
+- Points out subtle interactions ("this will break if...", "but now it won't work with...")
+- Asks probing questions to understand design choices ("Why not...?", "Does this...?")
+- Notes ordering/packing concerns ("Please reorder so the uint8_t's are together")
+
+## Feedback Severity Levels
+
+- **Blocking**: Must fix before merge (correctness bugs, missing error handling, ABI breaks)
+- **Suggestion**: Should fix for quality (better patterns, cleaner API, documentation)
+- **Nitpick**: Minor style/consistency (blank lines, naming, sorting)
 """
 
-    def __init__(self, max_context_tokens: int = 15000):
-        """Initialize the prompt builder.
 
-        Args:
-            max_context_tokens: Maximum tokens for context
-        """
+class PromptBuilder:
+    """Build prompts for dpgeorge-style code review."""
+
+    def __init__(self, max_context_tokens: int = 15000):
         self.max_context_tokens = max_context_tokens
 
     def build_review_prompt(
@@ -88,39 +111,30 @@ dpgeorge is respectful but direct. Feedback is technical and actionable.
     ) -> str:
         """Build a complete review prompt.
 
-        Args:
-            context: ReviewContext with diff and retrieved examples
-            include_style_guide: Include the style guide section
-            include_examples: Include past review examples
-            include_codebase: Include codebase context
-            output_format: Output format ("markdown" or "text")
-
-        Returns:
-            Complete prompt for the reviewer model
+        Section ordering: diff → codebase → examples → style guide + task.
+        Style context is placed last so it is freshest in the model's
+        attention when generation begins.
         """
         sections = []
 
-        # Style guide
-        if include_style_guide:
-            sections.append(self.STYLE_GUIDE)
+        # 1. Code to review (first — establishes what we're reviewing)
+        sections.append(self._format_code_to_review(context))
 
-        # Review examples
-        if include_examples and context.review_examples:
-            sections.append(self._format_review_examples(context.review_examples))
-
-        # Codebase context
+        # 2. Codebase context (if available)
         if include_codebase and context.codebase_context:
             sections.append(self._format_codebase_context(context.codebase_context))
 
-        # Code to review
-        sections.append(self._format_code_to_review(context))
+        # 3. Review examples (concrete demonstrations)
+        if include_examples and context.review_examples:
+            sections.append(self._format_review_examples(context.review_examples))
 
-        # Task description
+        # 4. Style guide + task description (freshest in attention)
+        if include_style_guide:
+            sections.append(STYLE_GUIDE)
         sections.append(self._format_task_description())
 
         prompt = "\n\n".join(sections)
 
-        # Truncate if needed
         if self._estimate_tokens(prompt) > self.max_context_tokens:
             logger.warning(
                 f"Prompt exceeds token limit ({self._estimate_tokens(prompt)} > "
@@ -131,14 +145,6 @@ dpgeorge is respectful but direct. Feedback is technical and actionable.
         return prompt
 
     def _format_review_examples(self, examples: List[Dict[str, Any]]) -> str:
-        """Format past review examples.
-
-        Args:
-            examples: List of review examples
-
-        Returns:
-            Formatted section
-        """
         if not examples:
             return ""
 
@@ -149,31 +155,33 @@ dpgeorge is respectful but direct. Feedback is technical and actionable.
             lines.append(f"Domain: **{example.get('domain', 'N/A')}** | "
                         f"Severity: **{example.get('severity', 'N/A')}**")
 
-            # Add relevance score if available
             score = example.get("rrf_score") or example.get("rerank_score")
             if score:
                 lines.append(f"Relevance: {score:.2%}")
 
-            # Add file context if available
-            if example.get("path"):
-                lines.append(f"File: `{example['path']}`")
+            file_path = example.get("file_path") or example.get("path")
+            if file_path:
+                lines.append(f"File: `{file_path}`")
 
-            # Add code context
             if example.get("diff_hunk"):
                 lines.append("\nCode context:")
                 lines.append("```diff")
                 diff = example["diff_hunk"]
-                # Limit diff length
                 if len(diff) > 500:
                     diff = diff[:500] + "\n... (truncated)"
                 lines.append(diff)
                 lines.append("```")
 
-            # Add the comment
             lines.append("\ndpgeorge's feedback:")
             lines.append(f"> {example['body']}")
 
-            # Add metadata if available
+            # Thread context if available (from graph expansion)
+            if example.get("thread"):
+                lines.append("\nRelated comments in thread:")
+                for msg in example["thread"]:
+                    body = msg.get("body", "")[:300]
+                    lines.append(f"> {body}")
+
             metadata = []
             if example.get("is_style_example"):
                 metadata.append("_style example_")
@@ -190,20 +198,11 @@ dpgeorge is respectful but direct. Feedback is technical and actionable.
         return "\n".join(lines)
 
     def _format_codebase_context(self, context: Dict[str, Any]) -> str:
-        """Format codebase context.
-
-        Args:
-            context: Codebase context dictionary
-
-        Returns:
-            Formatted section
-        """
         lines = ["# MicroPython Codebase Context\n"]
 
-        # Related definitions
         if context.get("related_definitions"):
             lines.append("## Relevant Definitions\n")
-            for defn in context["related_definitions"][:3]:  # Top 3
+            for defn in context["related_definitions"][:3]:
                 lines.append(f"### {defn.get('symbol', 'Symbol')} ({defn.get('type', 'unknown')})")
                 lines.append(f"File: `{defn.get('file', 'N/A')}` "
                             f"(line {defn.get('line', '?')})")
@@ -211,27 +210,17 @@ dpgeorge is respectful but direct. Feedback is technical and actionable.
                 lines.append(defn.get("context", ""))
                 lines.append("```\n")
 
-        # Similar patterns
         if context.get("similar_patterns"):
             lines.append("## Similar Code Patterns\n")
-            for pattern in context["similar_patterns"][:3]:  # Top 3
+            for pattern in context["similar_patterns"][:3]:
                 lines.append(f"- `{pattern.get('file', 'N/A')}` "
                             f"({pattern.get('match_count', 0)} keyword matches)")
 
         return "\n".join(lines)
 
     def _format_code_to_review(self, context: ReviewContext) -> str:
-        """Format the code being reviewed.
-
-        Args:
-            context: ReviewContext
-
-        Returns:
-            Formatted section
-        """
         lines = ["# Code to Review\n"]
 
-        # PR info if available
         if context.pr_number:
             lines.append(f"## PR #{context.pr_number}")
             if context.pr_title:
@@ -242,11 +231,9 @@ dpgeorge is respectful but direct. Feedback is technical and actionable.
                 lines.append(f"\nCommit message:\n> {context.commit_message}")
             lines.append("")
 
-        # The diff
         lines.append("## Diff\n")
         lines.append("```diff")
         diff = context.diff_text
-        # Limit total diff size but keep it readable
         if len(diff) > 5000:
             lines.append(diff[:5000])
             lines.append("\n... (diff truncated for length)")
@@ -257,66 +244,57 @@ dpgeorge is respectful but direct. Feedback is technical and actionable.
         return "\n".join(lines)
 
     def _format_task_description(self) -> str:
-        """Format the task description.
-
-        Returns:
-            Task description section
-        """
         return """# Your Task
 
-You are a code reviewer with dpgeorge's expertise and attention to detail. Review the code above
-in their style, considering:
+Review the code above in dpgeorge's style. Be direct, technical, and concise.
 
-1. **Correctness**: Are there any logic bugs, edge cases, or error handling issues?
-2. **Code Style**: Does the code follow MicroPython conventions?
-3. **Memory Efficiency**: Is the code appropriate for embedded systems?
-4. **API Design**: Is the interface clean and well-designed?
-5. **Portability**: Will the code work across MicroPython's platforms?
+For each issue found, provide:
+1. The file and line/hunk reference
+2. Severity: **Blocking** / **Suggestion** / **Nitpick**
+3. The feedback itself — terse for nitpicks, detailed for blocking issues
 
-Provide specific, actionable feedback with appropriate severity:
-- **Blocking**: Must fix before merge
-- **Suggestion**: Should fix for quality
-- **Nitpick**: Minor style issues
+Prioritize:
+- Correctness: logic bugs, edge cases, error handling
+- Memory: embedded constraints, allocation, leaks
+- API design: clean interfaces, backwards compatibility
+- Code style: MicroPython conventions
+- Portability: cross-platform assumptions
 
-Be direct and technical, like dpgeorge. Reference the provided examples where relevant."""
+Match the tone and brevity of the examples above. Do not pad feedback with
+filler or compliments."""
 
     def _estimate_tokens(self, text: str) -> int:
-        """Rough estimate of token count (approximate).
-
-        Uses ~1 token per 4 characters as a heuristic.
-
-        Args:
-            text: Text to estimate
-
-        Returns:
-            Estimated token count
-        """
         return len(text) // 4
 
     def _truncate_prompt(self, prompt: str) -> str:
         """Truncate prompt to fit within token limit.
 
-        Prioritizes: style guide > examples > codebase > diff
-
-        Args:
-            prompt: Full prompt
-
-        Returns:
-            Truncated prompt
+        Keeps: code to review (first) and style guide + task (last).
+        Trims: codebase context and examples from the middle.
         """
-        # Simple strategy: remove examples until it fits
         sections = prompt.split("\n\n# ")
-        style_guide = sections[0]
+        if len(sections) <= 2:
+            return prompt
 
-        # Keep style guide and task
-        result = [style_guide]
+        first = sections[0]
+        last = sections[-1]
+        middle = sections[1:-1]
 
-        for section in sections[1:]:
-            test_prompt = "\n\n# ".join(result + [section])
-            if self._estimate_tokens(test_prompt) <= self.max_context_tokens:
-                result.append(section)
+        # Reserve space for the bookend sections
+        bookend_tokens = self._estimate_tokens(
+            "\n\n# ".join([first, last])
+        )
+        remaining_budget = self.max_context_tokens - bookend_tokens
 
-        return "\n\n# ".join(result)
+        # Greedily add middle sections within budget
+        kept_middle = []
+        for section in middle:
+            section_tokens = self._estimate_tokens("\n\n# " + section)
+            if remaining_budget >= section_tokens:
+                kept_middle.append(section)
+                remaining_budget -= section_tokens
+
+        return "\n\n# ".join([first] + kept_middle + [last])
 
 
 # Global prompt builder instance
@@ -324,14 +302,6 @@ _builder: Optional[PromptBuilder] = None
 
 
 def get_builder(max_tokens: int = 15000) -> PromptBuilder:
-    """Get or create a prompt builder.
-
-    Args:
-        max_tokens: Maximum context tokens
-
-    Returns:
-        PromptBuilder instance
-    """
     global _builder
     if _builder is None:
         _builder = PromptBuilder(max_context_tokens=max_tokens)
@@ -345,18 +315,7 @@ def build_prompt(
     pr_number: Optional[int] = None,
     pr_title: Optional[str] = None,
 ) -> str:
-    """Convenience function to build a review prompt.
-
-    Args:
-        diff_text: Code diff
-        review_examples: Past review examples
-        codebase_context: Codebase context
-        pr_number: PR number if available
-        pr_title: PR title if available
-
-    Returns:
-        Complete review prompt
-    """
+    """Convenience function to build a review prompt."""
     context = ReviewContext(
         diff_text=diff_text,
         review_examples=review_examples,
