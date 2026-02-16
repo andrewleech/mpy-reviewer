@@ -206,9 +206,15 @@ def review(
             click.echo("Error: Empty diff", err=True)
             sys.exit(1)
 
+        # Extract file list from diff for file-path affinity
+        from .codebase import extract_diff_file_paths
+        files_changed = extract_diff_file_paths(diff_text)
+
         # Get similar reviews
         retriever = get_retriever()
-        results = retriever.get_similar_reviews(diff_text, top_k=top_k * 2)
+        results = retriever.get_similar_reviews(
+            diff_text, top_k=top_k * 2, diff_files=files_changed,
+        )
 
         # Re-rank if requested
         if rerank:
@@ -248,6 +254,7 @@ def review(
                 review_examples=results[:top_k],
                 codebase_context=codebase_context,
                 pr_number=pr_number,
+                files_changed=files_changed,
             )
             builder = get_builder()
             prompt = builder.build_review_prompt(context)
@@ -280,50 +287,6 @@ def _fetch_pr_diff(pr_number: int) -> str:
         sys.exit(1)
 
     return result.stdout
-
-
-def _build_prompt(diff_text: str, results: list) -> str:
-    """Build a full prompt for Claude."""
-    prompt = """# dpgeorge Review Style Guide
-
-When reviewing MicroPython code, dpgeorge focuses on:
-- Correctness: Logic bugs, edge cases, proper error handling
-- Code style: Consistent formatting, naming conventions
-- Memory efficiency: Embedded systems constraints
-- API design: Clean interfaces, backwards compatibility
-
-# Relevant Past Reviews by dpgeorge
-
-"""
-
-    for i, result in enumerate(results, 1):
-        prompt += f"## Example {i}: {result.get('domain', 'N/A')} - {result.get('severity', 'N/A')}\n"
-        if result.get("diff_hunk"):
-            prompt += "```diff\n"
-            prompt += result["diff_hunk"][:1500]
-            prompt += "\n```\n"
-        prompt += f"\ndpgeorge's comment:\n> {result['body']}\n\n---\n\n"
-
-    prompt += """# Code to Review
-
-```diff
-"""
-    prompt += diff_text[:10000]  # Limit diff size
-    prompt += """
-```
-
-# Your Task
-
-Review this code in dpgeorge's style. Consider:
-- Correctness (logic bugs, edge cases)
-- Code style (MicroPython conventions)
-- Memory efficiency (embedded constraints)
-- API design (if public interfaces affected)
-
-Provide feedback with appropriate severity levels (blocking/suggestion/nitpick).
-"""
-
-    return prompt
 
 
 @cli.group()

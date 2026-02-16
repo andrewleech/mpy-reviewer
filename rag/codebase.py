@@ -317,6 +317,20 @@ def get_codebase_retriever() -> CodebaseRetriever:
     return _codebase_retriever
 
 
+def extract_diff_file_paths(diff_text: str) -> List[str]:
+    """Extract file paths from a unified diff.
+
+    Module-level utility so callers don't need a CodebaseRetriever instance.
+    """
+    paths: Set[str] = set()
+    for pattern in [
+        r"^diff\s+--git\s+a/(.+?)\s+b/",
+        r"^(?:---|\+\+\+)\s+[ab]/(.+?)(?:\s|$)",
+    ]:
+        paths.update(re.findall(pattern, diff_text, re.MULTILINE))
+    return sorted(paths)
+
+
 def get_code_context(diff_text: str, top_k: int = 5) -> Dict[str, Any]:
     """Convenience function to get code context for a diff.
 
