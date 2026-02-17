@@ -6,5 +6,8 @@
   "homepage": "https://github.com/andrewleech/mpy-reviewer",
   "repository": "https://github.com/andrewleech/mpy-reviewer",
   "license": "MIT",
-  "keywords": ["micropython", "code-review", "rag"]
+  "keywords": ["micropython", "code-review", "rag"],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
 }

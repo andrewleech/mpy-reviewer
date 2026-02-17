@@ -2,27 +2,33 @@
 
 Get started with the MicroPython code review assistant in 5 minutes.
 
-## Prerequisites
+## Install as Claude Code Plugin
 
-- Python 3.10+
-- 10GB+ disk space
-- 4GB+ RAM (8GB+ recommended)
+The plugin handles venv creation, Python dependencies, and codanna installation automatically.
 
-## Installation (5 minutes)
+```
+/plugin marketplace add andrewleech/mpy-reviewer
+/plugin install mpy-reviewer@mpy-reviewer
+```
+
+This registers the MCP server, skill, and a SessionStart hook that bootstraps the environment on first use (requires Python 3.10+ and Rust/cargo for codanna).
+
+## Manual Installation
+
+For use outside Claude Code or to build the vector index manually:
 
 ```bash
-cd /home/anl/mpy/mpy-reviewer
+cd /path/to/mpy-reviewer
 
-# Create virtual environment
 python3 -m venv venv
 source venv/bin/activate
 
-# Install with GPU support (if available)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+# CPU-only PyTorch (recommended unless you have CUDA)
+pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -e .
 
-# Or CPU-only (smaller, slower)
-pip install -e .
+# codanna for codebase analysis (requires Rust)
+cargo install codanna --all-features
 ```
 
 ## Build Index (2-3 hours on CPU, 15-20 min on GPU) ⏳
@@ -299,53 +305,6 @@ mpy-reviewer eval --help
 # Check installation
 python3 -c "import rag; print(rag.__version__)"
 ```
-
-## Claude Code Skill Setup
-
-To use this as a Claude Code skill with natural language:
-
-### 1. Install the Plugin
-
-```
-/plugin marketplace add andrewleech/mpy-reviewer
-/plugin install mpy-reviewer@mpy-reviewer
-```
-
-### 2. Verify Installation
-
-The skill should now be available in Claude Code. Test it by asking Claude:
-
-```
-Can you /mpy-review stats
-```
-
-This should show the index status (18,614 records).
-
-**Note:** The skill requires the virtual environment and index to be set up first (steps above).
-
-### 3. Usage Examples
-
-Ask Claude to review your code using natural language:
-
-```
-# Review your current work
-Can you review my current branch?
-Can you /mpy-review my uncommitted changes?
-
-# Review specific commit
-Can you review commit ca65d543?
-
-# Review specific files
-Can you review my changes to py/gc.c?
-
-# Find review examples
-Can you find examples of memory allocation reviews?
-What has the lead maintainer said about error handling?
-```
-
-Claude interprets your request, runs the appropriate git/search commands, and provides review feedback.
-
-See `skills/review/SKILL.md` for the agent's complete instructions.
 
 ---
 

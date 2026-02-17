@@ -77,38 +77,30 @@ mpy-reviewer/
 
 ## Quick Start
 
-### Prerequisites
+### Install as Claude Code Plugin
 
-This tool requires:
-- **Python 3.10+** for the RAG system
-- **Rust/cargo** for codanna (semantic code search)
-
-Install Rust if not already installed:
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
+```
+/plugin marketplace add andrewleech/mpy-reviewer
+/plugin install mpy-reviewer@mpy-reviewer
 ```
 
-### Setup Environment
+The plugin's SessionStart hook creates the venv, installs the package, and installs codanna automatically. Requires Python 3.10+ and Rust/cargo.
+
+### Manual Setup
+
+For development on this repo or use outside Claude Code:
 
 ```bash
 cd /home/anl/mpy/mpy-reviewer
 
-# Create and activate virtual environment
 python3 -m venv venv
 source venv/bin/activate
 
-# Install Python dependencies (includes sentence-transformers for reranking)
+pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -e .
 
-# For CPU-only PyTorch (recommended for WSL2/systems without CUDA):
-pip install torch --index-url https://download.pytorch.org/whl/cpu
-
-# Install codanna for semantic code search (REQUIRED)
 cargo install codanna --all-features
 ```
-
-**Claude Code users:** If using as a skill, the SessionStart hook automatically installs codanna. See `docs/CLAUDE_SETUP.md`.
 
 ### Using the CLI
 
@@ -134,56 +126,16 @@ mpy-reviewer search "type checking" --json
 
 ### Using as a Claude Code Skill
 
-The system can be installed as a Claude Code skill for conversational access within Claude Code sessions.
-
-**Installation:**
+Once the plugin is installed, ask Claude to review code using natural language:
 
 ```
-/plugin marketplace add andrewleech/mpy-reviewer
-/plugin install mpy-reviewer@mpy-reviewer
-```
-
-**Usage:**
-
-Once installed, ask Claude to review your code using natural language:
-
-```
-# Review your current changes
 Can you review my current branch?
-Can you /mpy-review the current branch?
-
-# Review specific commit
 Can you review commit ca65d543?
-Can you /mpy-review commit ca65d543?
-
-# Review specific files
 Can you review my changes to py/gc.c?
-
-# Find review examples
 Can you find examples of memory allocation reviews?
-Can you /mpy-review find examples of memory allocation?
-
-# Get quick context
-What has the lead maintainer said about error handling?
 ```
 
-**Note:** Skills are invoked BY Claude, not directly by users. You ask Claude to use the skill, and Claude runs the appropriate commands.
-
-**Features:**
-- Natural language interface (no CLI arguments needed)
-- Agent interprets intent and runs appropriate git/search commands
-- Semantic search across 18,614 categorized review comments
-- Automatic diff generation for commits, branches, files
-- Generates maintainer-style review feedback
-
-**How it works:**
-The skill agent parses your natural language request, runs the appropriate git commands to generate diffs, pipes them to the review tool, and presents the results conversationally.
-
-**Documentation:** See `skills/review/SKILL.md` for the agent's complete instructions including:
-- Intent parsing and command mapping
-- Git integration patterns
-- When to use different options
-- Error handling
+Skills are invoked by Claude, not directly by users. See `skills/review/SKILL.md` for the skill's instructions.
 
 ### Python API
 

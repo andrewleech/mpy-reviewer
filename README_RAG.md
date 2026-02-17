@@ -12,41 +12,48 @@ This system enables AI models (like Claude) to generate high-quality code review
 
 ## Quick Start
 
-### Prerequisites
+### Install as Claude Code Plugin
 
-- Python 3.10+
-- Rust/cargo (for codanna)
+The plugin handles all setup automatically (venv, Python dependencies, codanna) via a SessionStart hook.
 
-```bash
-# Install Rust if not installed
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
+```
+/plugin marketplace add andrewleech/mpy-reviewer
+/plugin install mpy-reviewer@mpy-reviewer
 ```
 
-### Installation
+This registers the MCP server, skill, and setup hook. On first session start the hook creates a venv, installs the package, and installs codanna (requires Rust/cargo).
+
+Once installed, ask Claude to review code:
+
+```
+Can you review my current branch?
+Can you review commit ca65d543?
+Can you find examples of memory allocation reviews?
+```
+
+### Manual Installation
+
+For use outside Claude Code, or if you need to build the vector index:
 
 ```bash
-# Clone/navigate to project
-cd /home/anl/mpy/mpy-reviewer
+cd /path/to/mpy-reviewer
 
-# Create virtual environment
 python3 -m venv venv
 source venv/bin/activate
 
-# Install Python dependencies (includes sentence-transformers for reranking)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+# CPU-only PyTorch (recommended unless you have CUDA)
+pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -e .
 
-# Install codanna for semantic code search (REQUIRED)
+# codanna for codebase analysis (requires Rust)
 cargo install codanna --all-features
 ```
-
-**Note:** Claude Code skill users get automatic codanna installation via SessionStart hook. See Integration section below.
 
 ### Build Vector Index
 
 ```bash
 # One-time setup: build embedding index (takes 2-3 hours on CPU, 15-20 min on GPU)
+source venv/bin/activate
 mpy-reviewer index --force --batch-size 32
 ```
 
@@ -302,34 +309,6 @@ class Config:
 ```
 
 ## Integration with Claude
-
-### As a Claude Code Skill
-
-To use as a Claude Code skill with natural language interface:
-
-1. **Install the plugin:**
-   ```
-   /plugin marketplace add andrewleech/mpy-reviewer
-   /plugin install mpy-reviewer@mpy-reviewer
-   ```
-
-2. **Ask Claude to review your code:**
-   ```
-   Can you review my current branch?
-   Can you /mpy-review the current branch?
-
-   Can you review commit ca65d543?
-
-   Can you review my changes to py/gc.c?
-
-   Can you find examples of memory allocation?
-   ```
-
-**Note:** Skills are invoked BY Claude, not directly by users. You ask Claude to use the skill.
-
-Claude interprets your request and automatically runs the appropriate git/search commands.
-
-See `skills/review/SKILL.md` for the agent's complete instructions.
 
 ### As Python Module
 

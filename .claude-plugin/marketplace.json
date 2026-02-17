@@ -1,4 +1,5 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "mpy-reviewer",
   "owner": { "name": "Andrew Leech" },
   "metadata": { "description": "MicroPython code review RAG system" },
