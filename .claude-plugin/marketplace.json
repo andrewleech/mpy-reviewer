@@ -1,0 +1,12 @@
+{
+  "name": "mpy-reviewer",
+  "owner": { "name": "Andrew Leech" },
+  "metadata": { "description": "MicroPython code review RAG system" },
+  "plugins": [
+    {
+      "name": "mpy-reviewer",
+      "source": "./",
+      "description": "MicroPython code review assistant backed by 18,614 categorized review comments"
+    }
+  ]
+}

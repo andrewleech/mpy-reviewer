@@ -307,11 +307,10 @@ class Config:
 
 To use as a Claude Code skill with natural language interface:
 
-1. **Install the skill:**
-   ```bash
-   mkdir -p ~/.claude/skills/mpy-review
-   ln -s /home/anl/mpy/mpy-reviewer/skill/SKILL.md \
-         ~/.claude/skills/mpy-review/SKILL.md
+1. **Install the plugin:**
+   ```
+   /plugin marketplace add andrewleech/mpy-reviewer
+   /plugin install mpy-reviewer@mpy-reviewer
    ```
 
 2. **Ask Claude to review your code:**
@@ -330,7 +329,7 @@ To use as a Claude Code skill with natural language interface:
 
 Claude interprets your request and automatically runs the appropriate git/search commands.
 
-See `skill/SKILL.md` for the agent's complete instructions.
+See `skills/review/SKILL.md` for the agent's complete instructions.
 
 ### As Python Module
 

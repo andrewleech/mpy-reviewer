@@ -56,8 +56,16 @@ mpy-reviewer/
 │   ├── analyze_usage.py           # Analyze usage logs for performance
 │   ├── migrate_schema.py          # Database schema migrations
 │   └── ...                        # Other utility scripts
-├── skill/
-│   └── SKILL.md                   # Claude Code skill configuration
+├── skills/
+│   └── review/
+│       └── SKILL.md               # Claude Code skill configuration
+├── hooks/
+│   ├── hooks.json                 # Plugin hook definitions
+│   └── setup.sh                   # Venv, package, and codanna setup
+├── .claude-plugin/
+│   ├── plugin.json                # Plugin manifest
+│   └── marketplace.json           # Marketplace catalog
+├── .mcp.json                      # MCP server config (plugin installs)
 ├── docs/                          # Documentation and notes
 ├── logs/                          # Script logs
 ├── venv/                          # Python virtual environment
@@ -130,13 +138,9 @@ The system can be installed as a Claude Code skill for conversational access wit
 
 **Installation:**
 
-```bash
-# Create skill directory
-mkdir -p ~/.claude/skills/mpy-review
-
-# Link the SKILL.md file
-ln -s /home/anl/mpy/mpy-reviewer/skill/SKILL.md \
-      ~/.claude/skills/mpy-review/SKILL.md
+```
+/plugin marketplace add andrewleech/mpy-reviewer
+/plugin install mpy-reviewer@mpy-reviewer
 ```
 
 **Usage:**
@@ -175,7 +179,7 @@ What has the lead maintainer said about error handling?
 **How it works:**
 The skill agent parses your natural language request, runs the appropriate git commands to generate diffs, pipes them to the review tool, and presents the results conversationally.
 
-**Documentation:** See `skill/SKILL.md` for the agent's complete instructions including:
+**Documentation:** See `skills/review/SKILL.md` for the agent's complete instructions including:
 - Intent parsing and command mapping
 - Git integration patterns
 - When to use different options

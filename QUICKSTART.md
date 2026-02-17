@@ -304,15 +304,11 @@ python3 -c "import rag; print(rag.__version__)"
 
 To use this as a Claude Code skill with natural language:
 
-### 1. Install the Skill
+### 1. Install the Plugin
 
-```bash
-# Create skill directory
-mkdir -p ~/.claude/skills/mpy-review
-
-# Link the SKILL.md file
-ln -s /home/anl/mpy/mpy-reviewer/skill/SKILL.md \
-      ~/.claude/skills/mpy-review/SKILL.md
+```
+/plugin marketplace add andrewleech/mpy-reviewer
+/plugin install mpy-reviewer@mpy-reviewer
 ```
 
 ### 2. Verify Installation
@@ -349,7 +345,7 @@ What has the lead maintainer said about error handling?
 
 Claude interprets your request, runs the appropriate git/search commands, and provides review feedback.
 
-See `skill/SKILL.md` for the agent's complete instructions.
+See `skills/review/SKILL.md` for the agent's complete instructions.
 
 ---
 

@@ -21,9 +21,8 @@ Invoke this skill when the user:
 - Mentions reviewing, feedback, or code quality for MicroPython
 
 **Important:** Users cannot invoke skills directly. They must ask you to use the skill:
-- ✅ User: "Can you review my current branch?"
-- ✅ User: "Can you /mpy-review the current branch?"
-- ❌ User: "/mpy-review the current branch" (this will fail)
+- User: "Can you review my current branch?"
+- User: "Can you /mpy-review the current branch?"
 
 When the user asks for review help, invoke this skill proactively.
 
@@ -31,7 +30,7 @@ When the user asks for review help, invoke this skill proactively.
 
 This skill requires **codanna** for semantic code search and codebase analysis.
 
-**Automatic setup:** A SessionStart hook (`.claude/hooks/ensure-codanna.sh`) automatically installs codanna via cargo on first use.
+**Automatic setup:** A SessionStart hook automatically installs codanna via cargo on first use.
 
 **Manual installation:**
 ```bash
@@ -40,13 +39,11 @@ cargo install codanna --all-features
 
 If codanna is not installed, the tool will fail with a prominent error message directing the user to install it.
 
-See `docs/CLAUDE_SETUP.md` for detailed setup instructions.
-
 ## Tool Location
 
 The underlying CLI tool is located at:
 ```
-/home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer
+${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer
 ```
 
 Always use this full path when invoking the tool. Do not rely on PATH.
@@ -60,12 +57,12 @@ Parse natural language requests and map to appropriate tool commands:
 
 **What to do:**
 1. Generate diff: `git diff main` (or appropriate base branch)
-2. Pipe to tool: `git diff main | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin --codebase --output prompt`
+2. Pipe to tool: `git diff main | ${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer review --stdin --codebase --output prompt`
 3. Present the review prompt to help the user
 
 **Example:**
 ```bash
-git diff main | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin --codebase --output prompt
+git diff main | ${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer review --stdin --codebase --output prompt
 ```
 
 ### Review Specific Commit
@@ -73,11 +70,11 @@ git diff main | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin 
 
 **What to do:**
 1. Get commit diff: `git show abc123`
-2. Pipe to tool: `git show abc123 | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin --output prompt`
+2. Pipe to tool: `git show abc123 | ${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer review --stdin --output prompt`
 
 **Example:**
 ```bash
-git show ca65d543 | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin --codebase --output prompt
+git show ca65d543 | ${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer review --stdin --codebase --output prompt
 ```
 
 ### Review Uncommitted Changes
@@ -86,10 +83,10 @@ git show ca65d543 | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --st
 **What to do:**
 ```bash
 # All uncommitted changes (staged + unstaged)
-git diff HEAD | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin --output prompt
+git diff HEAD | ${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer review --stdin --output prompt
 
 # Only staged changes
-git diff --cached | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin --output prompt
+git diff --cached | ${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer review --stdin --output prompt
 ```
 
 ### Review GitHub PR
@@ -97,7 +94,7 @@ git diff --cached | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --st
 
 **What to do:**
 ```bash
-/home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --pr 12345 --codebase --output prompt
+${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer review --pr 12345 --codebase --output prompt
 ```
 
 ### Review Specific Files
@@ -105,9 +102,9 @@ git diff --cached | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --st
 
 **What to do:**
 ```bash
-git diff main -- py/gc.c | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin --output prompt
+git diff main -- py/gc.c | ${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer review --stdin --output prompt
 
-git diff main -- extmod/ | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin --codebase --output prompt
+git diff main -- extmod/ | ${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer review --stdin --codebase --output prompt
 ```
 
 ### Find Review Examples
@@ -115,9 +112,9 @@ git diff main -- extmod/ | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer revi
 
 **What to do:**
 ```bash
-/home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer search "memory allocation" --domain memory -k 10
+${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer search "memory allocation" --domain memory -k 10
 
-/home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer search "error handling" --domain correctness -k 10
+${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer search "error handling" --domain correctness -k 10
 ```
 
 ### Get Quick Context (No Full Prompt)
@@ -126,14 +123,14 @@ git diff main -- extmod/ | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer revi
 **What to do:**
 Use `--output context` instead of `--output prompt` to get just the examples without full prompt structure:
 ```bash
-git diff main | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin --output context
+git diff main | ${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer review --stdin --output context
 ```
 
 ## Tool Commands Reference
 
 ### Review Command
 ```bash
-/home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review [OPTIONS]
+${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer review [OPTIONS]
 ```
 
 **Input Options (choose one):**
@@ -153,7 +150,7 @@ git diff main | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin 
 
 ### Search Command
 ```bash
-/home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer search "query" [OPTIONS]
+${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer search "query" [OPTIONS]
 ```
 
 **Options:**
@@ -166,7 +163,7 @@ git diff main | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin 
 
 ### Stats Command
 ```bash
-/home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer stats
+${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer stats
 ```
 
 Shows index status and record count. Use this to verify the system is working.
@@ -233,7 +230,7 @@ Returns structured data. Parse and present relevant fields to user.
 **User:** "Can you review my current changes?"
 
 **Your response:**
-1. Run: `git diff main | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin --codebase --output prompt`
+1. Run: `git diff main | ${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer review --stdin --codebase --output prompt`
 2. Read the generated prompt
 3. Use the prompt to provide maintainer-style review feedback to the user
 
@@ -242,7 +239,7 @@ Returns structured data. Parse and present relevant fields to user.
 **User:** "What has been said about similar code before?"
 
 **Your response:**
-1. Run: `git diff main | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin --output context`
+1. Run: `git diff main | ${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer review --stdin --output context`
 2. Present the review examples to the user directly
 3. Summarize common themes
 
@@ -251,7 +248,7 @@ Returns structured data. Parse and present relevant fields to user.
 **User:** "Find me examples of feedback on GPIO configuration"
 
 **Your response:**
-1. Run: `/home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer search "GPIO configuration" --component port_specific -k 15`
+1. Run: `${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer search "GPIO configuration" --component port_specific -k 15`
 2. Present the search results
 3. Summarize key patterns
 
@@ -260,7 +257,7 @@ Returns structured data. Parse and present relevant fields to user.
 **User:** "Review commit ca65d543"
 
 **Your response:**
-1. Run: `git show ca65d543 | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin --codebase --output prompt`
+1. Run: `git show ca65d543 | ${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer review --stdin --codebase --output prompt`
 2. Use the prompt to provide review feedback
 3. Highlight key issues found from similar past reviews
 
@@ -269,7 +266,7 @@ Returns structured data. Parse and present relevant fields to user.
 **User:** "Can you review my changes to py/gc.c?"
 
 **Your response:**
-1. Run: `git diff main -- py/gc.c | /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer review --stdin --codebase --output prompt`
+1. Run: `git diff main -- py/gc.c | ${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer review --stdin --codebase --output prompt`
 2. Provide targeted review focusing on that file
 3. Reference relevant review patterns for GC code
 
@@ -306,7 +303,7 @@ Returns structured data. Parse and present relevant fields to user.
 The vector index hasn't been built. Inform user:
 ```
 The review database index needs to be built first. Run:
-cd /home/anl/mpy/mpy-reviewer
+cd ${CLAUDE_PLUGIN_ROOT}
 source venv/bin/activate
 python scripts/build_index_resume.py
 ```
@@ -314,7 +311,7 @@ python scripts/build_index_resume.py
 ### "Command not found"
 The tool path is incorrect. Verify with:
 ```bash
-ls -l /home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer
+ls -l ${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer
 ```
 
 ### Git errors (no repository, invalid ref, etc.)
@@ -354,7 +351,7 @@ Always interpret user intent conversationally, then invoke the appropriate tool 
 
 ## Important Notes
 
-1. **Always use full path:** `/home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer`
+1. **Always use full path:** `${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer`
 2. **Prefer stdin for git integration:** Use `git diff \| ... --stdin` over temp files
 3. **Default to quality:** Use `--codebase --output prompt` unless user wants quick results
 4. **Be conversational:** Don't just relay CLI output, interpret and present meaningfully
@@ -365,7 +362,7 @@ Always interpret user intent conversationally, then invoke the appropriate tool 
 
 To test the skill is working:
 ```bash
-/home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer stats
+${CLAUDE_PLUGIN_ROOT}/venv/bin/mpy-reviewer stats
 ```
 
 Should show:

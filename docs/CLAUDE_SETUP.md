@@ -30,7 +30,7 @@ The project includes a Claude Code SessionStart hook that automatically installs
 
 When you start Claude Code in this project:
 
-1. The **SessionStart hook** (`.claude/hooks/ensure-codanna.sh`) runs automatically
+1. The **SessionStart hook** (`hooks/setup.sh`) runs automatically
 2. It checks if `codanna` is installed
 3. If not found, it runs `cargo install codanna --all-features`
 4. Installation takes ~5-10 minutes on first run
@@ -166,8 +166,8 @@ The SessionStart hook is configured in `.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/ensure-codanna.sh",
-            "description": "Ensure codanna is installed for codebase analysis"
+            "command": "$CLAUDE_PROJECT_DIR/hooks/setup.sh",
+            "description": "Ensure mpy-reviewer dependencies are installed"
           }
         ]
       }

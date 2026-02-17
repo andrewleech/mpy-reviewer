@@ -5,8 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/ensure-codanna.sh",
-            "description": "Ensure codanna is installed for codebase analysis"
+            "command": "$CLAUDE_PROJECT_DIR/hooks/setup.sh",
+            "description": "Ensure mpy-reviewer dependencies are installed"
           }
         ]
       }
@@ -15,10 +15,10 @@
   "mcpServers": {
     "mpy-reviewer": {
       "type": "stdio",
-      "command": "/home/anl/mpy/dpgeorge-review-db/venv/bin/python",
-      "args": ["/home/anl/mpy/dpgeorge-review-db/mcp_server.py"],
+      "command": "$CLAUDE_PROJECT_DIR/venv/bin/python",
+      "args": ["$CLAUDE_PROJECT_DIR/mcp_server.py"],
       "env": {
-        "PYTHONPATH": "/home/anl/mpy/dpgeorge-review-db"
+        "PYTHONPATH": "$CLAUDE_PROJECT_DIR"
       }
     }
   }
