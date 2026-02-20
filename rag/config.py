@@ -12,7 +12,6 @@ class Config:
     # Paths
     project_root: Path = field(default_factory=lambda: Path(__file__).parent.parent)
     sqlite_db_path: Path = field(default=None)
-    lance_db_path: Path = field(default=None)
     micropython_repo_path: Path = field(default=None)
 
     # Embedding model
@@ -40,8 +39,6 @@ class Config:
         # Set default paths relative to project root
         if self.sqlite_db_path is None:
             self.sqlite_db_path = self.project_root / "data" / "reviews.db"
-        if self.lance_db_path is None:
-            self.lance_db_path = self.project_root / "data" / "lance"
         if self.micropython_repo_path is None:
             self.micropython_repo_path = Path("/home/corona/mpy/review")
 

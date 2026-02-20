@@ -72,7 +72,7 @@ def stats(ctx):
 
     stats = index_stats()
 
-    click.echo(f"Lance DB path: {stats['lance_path']}")
+    click.echo(f"Database path: {stats['db_path']}")
     click.echo(f"Index exists: {stats['exists']}")
 
     if stats["exists"]:

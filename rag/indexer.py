@@ -1,13 +1,11 @@
-"""Index reviews into LanceDB."""
+"""Index reviews into sqlite-vec (vec0 + FTS5)."""
 
-import json
 import sqlite3
 import logging
 from typing import Iterator, Dict, Any, Optional
-from pathlib import Path
 
-import lancedb
-import pyarrow as pa
+import numpy as np
+import sqlite_vec
 from tqdm import tqdm
 
 from .config import get_config
@@ -15,26 +13,102 @@ from .embeddings import get_embedder
 
 logger = logging.getLogger(__name__)
 
-_INDEX_META_FILE = "index_meta.json"
+# Metadata columns stored in vec0 (filterable in KNN WHERE clause).
+_VEC_META_COLS = [
+    "comment_id", "comment_type", "domain", "severity", "component",
+    "port", "subsystem", "language_context", "code_construct",
+    "concern_type", "feedback_type",
+]
+
+# Auxiliary columns stored in vec0 (retrieved but not filterable).
+_VEC_AUX_COLS = [
+    "body", "diff_hunk", "file_path", "pr_number", "domain_id",
+    "theme", "is_style_example", "is_pattern", "cpython_related",
+    "has_code_suggestion", "keywords",
+]
+
+# Integer auxiliary columns (need int conversion on read, not NULL→None).
+_INT_AUX_COLS = {
+    "pr_number", "domain_id", "is_style_example", "is_pattern",
+    "cpython_related", "has_code_suggestion",
+}
+
+# All non-vector columns returned by queries.
+_ALL_COLS = _VEC_META_COLS + _VEC_AUX_COLS
+
+_CREATE_VEC_TABLE = """
+CREATE VIRTUAL TABLE IF NOT EXISTS vec_reviews USING vec0(
+    embedding float[768] distance_metric=cosine,
+    comment_id integer,
+    comment_type text,
+    domain text,
+    severity text,
+    component text,
+    port text,
+    subsystem text,
+    language_context text,
+    code_construct text,
+    concern_type text,
+    feedback_type text,
+    +body text,
+    +diff_hunk text,
+    +file_path text,
+    +pr_number integer,
+    +domain_id integer,
+    +theme text,
+    +is_style_example integer,
+    +is_pattern integer,
+    +cpython_related integer,
+    +has_code_suggestion integer,
+    +keywords text
+)
+"""
+
+_CREATE_FTS_TABLE = """
+CREATE VIRTUAL TABLE IF NOT EXISTS review_fts USING fts5(
+    body,
+    content='',
+    content_rowid='rowid'
+)
+"""
+
+_CREATE_META_TABLE = """
+CREATE TABLE IF NOT EXISTS vec_index_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+)
+"""
 
 
-def _write_index_meta(lance_path: Path, model_name: str, record_count: int) -> None:
-    """Write embedding model metadata alongside the index."""
-    meta = {"embedding_model": model_name, "record_count": record_count}
-    (lance_path / _INDEX_META_FILE).write_text(json.dumps(meta))
+def _write_index_meta(conn: sqlite3.Connection, model_name: str, record_count: int) -> None:
+    """Write embedding model metadata into the database."""
+    conn.execute(
+        "INSERT OR REPLACE INTO vec_index_meta (key, value) VALUES (?, ?)",
+        ("embedding_model", model_name),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO vec_index_meta (key, value) VALUES (?, ?)",
+        ("record_count", str(record_count)),
+    )
+    conn.commit()
 
 
-def _check_index_model(lance_path: Path, expected_model: str) -> None:
+def _check_index_model(conn: sqlite3.Connection, expected_model: str) -> None:
     """Warn if the index was built with a different embedding model."""
-    meta_path = lance_path / _INDEX_META_FILE
-    if not meta_path.exists():
+    try:
+        row = conn.execute(
+            "SELECT value FROM vec_index_meta WHERE key = 'embedding_model'"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        # Table doesn't exist yet
+        return
+    if row is None:
         logger.warning(
             "No index metadata found — cannot verify embedding model compatibility. "
             "If search quality is poor, rebuild the index with: python scripts/build_index_resume.py"
         )
         return
-    meta = json.loads(meta_path.read_text())
-    index_model = meta.get("embedding_model", "unknown")
+    index_model = row[0]
     if index_model != expected_model:
         logger.warning(
             f"Embedding model mismatch: index was built with '{index_model}' "
@@ -43,19 +117,98 @@ def _check_index_model(lance_path: Path, expected_model: str) -> None:
         )
 
 
+def _load_vec(conn: sqlite3.Connection) -> None:
+    """Load the sqlite-vec extension into a connection."""
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
+
+
 def get_sqlite_connection() -> sqlite3.Connection:
-    """Get a connection to the SQLite database."""
+    """Get a connection to the SQLite database with sqlite-vec loaded."""
     config = get_config()
     conn = sqlite3.connect(config.sqlite_db_path)
     conn.row_factory = sqlite3.Row
+    _load_vec(conn)
     return conn
 
 
-def iter_review_comments(conn: sqlite3.Connection) -> Iterator[Dict[str, Any]]:
-    """Iterate over all review comments with their categorizations.
+def _vec_table_exists(conn: sqlite3.Connection) -> bool:
+    """Check if the vec_reviews virtual table exists."""
+    row = conn.execute(
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='vec_reviews'"
+    ).fetchone()
+    return row[0] > 0
 
-    Yields dicts with comment data and metadata.
+
+def _nullify_empty(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert empty-string metadata values back to None.
+
+    vec0 cannot store NULL in metadata columns so we store '' on insert
+    and convert back here.
     """
+    for key in _VEC_META_COLS:
+        if key in d and d[key] == "":
+            d[key] = None
+    # Also handle integer aux cols that came back as 0 when they should be None
+    # (not needed — 0 is a valid value for booleans)
+    return d
+
+
+def _row_to_dict(row: sqlite3.Row, include_distance: bool = False) -> Dict[str, Any]:
+    """Convert a sqlite3.Row from vec_reviews into a result dict."""
+    keys = row.keys()
+    d = {k: row[k] for k in keys if k != "embedding"}
+    return _nullify_empty(d)
+
+
+def _prepare_record(record: Dict[str, Any], embedding: np.ndarray) -> tuple:
+    """Prepare a record for INSERT into vec_reviews.
+
+    Returns a tuple of values in the column order expected by the INSERT statement.
+    vec0 metadata columns cannot store NULL, so we coerce to empty string.
+    """
+    vec_bytes = embedding.astype(np.float32).tobytes()
+
+    vals = [vec_bytes]  # embedding first
+
+    # Metadata columns — coerce None to ""
+    for col in _VEC_META_COLS:
+        v = record.get(col)
+        vals.append("" if v is None else v)
+
+    # Auxiliary columns — None is OK for aux cols
+    for col in _VEC_AUX_COLS:
+        vals.append(record.get(col))
+
+    return tuple(vals)
+
+
+def _insert_batch(
+    conn: sqlite3.Connection,
+    records: list,
+    embeddings: np.ndarray,
+) -> None:
+    """Insert a batch of records into vec_reviews and review_fts."""
+    col_names = "embedding, " + ", ".join(_VEC_META_COLS + _VEC_AUX_COLS)
+    placeholders = ", ".join(["?"] * (1 + len(_VEC_META_COLS) + len(_VEC_AUX_COLS)))
+    insert_sql = f"INSERT INTO vec_reviews ({col_names}) VALUES ({placeholders})"
+
+    for i, record in enumerate(records):
+        row_vals = _prepare_record(record, embeddings[i])
+        cursor = conn.execute(insert_sql, row_vals)
+        rowid = cursor.lastrowid
+
+        # Mirror body into FTS5
+        body = record.get("body") or ""
+        conn.execute(
+            "INSERT INTO review_fts (rowid, body) VALUES (?, ?)",
+            (rowid, body),
+        )
+
+
+def iter_review_comments(conn: sqlite3.Connection) -> Iterator[Dict[str, Any]]:
+    """Iterate over all review comments with their categorizations."""
     query = """
         SELECT
             rc.id as comment_id,
@@ -85,7 +238,6 @@ def iter_review_comments(conn: sqlite3.Connection) -> Iterator[Dict[str, Any]]:
         LEFT JOIN domains d ON cc.domain_id = d.id
         WHERE cc.theme != 'FAILED_CATEGORIZATION'
     """
-
     cursor = conn.execute(query)
     for row in cursor:
         yield dict(row)
@@ -122,7 +274,6 @@ def iter_issue_comments(conn: sqlite3.Connection) -> Iterator[Dict[str, Any]]:
         LEFT JOIN domains d ON cc.domain_id = d.id
         WHERE cc.theme != 'FAILED_CATEGORIZATION'
     """
-
     cursor = conn.execute(query)
     for row in cursor:
         yield dict(row)
@@ -160,7 +311,6 @@ def iter_reviews(conn: sqlite3.Connection) -> Iterator[Dict[str, Any]]:
         WHERE cc.theme != 'FAILED_CATEGORIZATION'
           AND r.body IS NOT NULL AND r.body != ''
     """
-
     cursor = conn.execute(query)
     for row in cursor:
         yield dict(row)
@@ -182,127 +332,84 @@ def count_comments(conn: sqlite3.Connection) -> int:
     return conn.execute(query).fetchone()[0]
 
 
+def _ensure_tables(conn: sqlite3.Connection) -> None:
+    """Create vec0, FTS5, and metadata tables if they don't exist."""
+    conn.execute(_CREATE_VEC_TABLE)
+    conn.execute(_CREATE_FTS_TABLE)
+    conn.execute(_CREATE_META_TABLE)
+    conn.commit()
+
+
 def build_index(
     batch_size: int = 100,
     show_progress: bool = True,
     force: bool = False,
 ) -> int:
-    """Build the LanceDB index from SQLite data.
+    """Build the sqlite-vec index from SQLite data.
 
     Args:
-        batch_size: Number of records to process at once
-        show_progress: Whether to show progress bar
-        force: Whether to overwrite existing index
+        batch_size: Number of records to process at once.
+        show_progress: Whether to show progress bar.
+        force: Whether to overwrite existing index.
 
     Returns:
-        Number of records indexed
+        Number of records indexed.
     """
     config = get_config()
     embedder = get_embedder()
+    conn = get_sqlite_connection()
 
-    # Check if index exists
-    lance_path = config.lance_db_path
-    table_exists = (lance_path / "reviews.lance").exists()
-
-    if table_exists and not force:
-        logger.warning(
-            f"Index already exists at {lance_path}. Use force=True to overwrite."
-        )
+    if _vec_table_exists(conn) and not force:
+        logger.warning("Index already exists. Use force=True to overwrite.")
+        conn.close()
         return 0
 
-    # Connect to databases
-    conn = get_sqlite_connection()
-    db = lancedb.connect(str(lance_path))
+    if force and _vec_table_exists(conn):
+        conn.execute("DROP TABLE IF EXISTS vec_reviews")
+        conn.execute("DROP TABLE IF EXISTS review_fts")
+        conn.execute("DROP TABLE IF EXISTS vec_index_meta")
+        conn.commit()
+
+    _ensure_tables(conn)
 
     total_count = count_comments(conn)
     logger.info(f"Building index for {total_count} comments")
 
-    # Process in chunks to avoid memory bloat
     batch_texts = []
     batch_records = []
-    table = None
     total_indexed = 0
-    chunk_size = batch_size * 10  # Write 10 batches at a time
 
     iterator = iter_all_comments(conn)
     if show_progress:
         iterator = tqdm(iterator, total=total_count, desc="Indexing")
 
     for comment in iterator:
-        try:
-            # Prepare text for embedding
-            text = comment["body"] or ""
-            if comment["diff_hunk"]:
-                text = f"{text}\n\nCode context:\n{comment['diff_hunk']}"
+        text = comment["body"] or ""
+        if comment["diff_hunk"]:
+            text = f"{text}\n\nCode context:\n{comment['diff_hunk']}"
 
-            batch_texts.append(text)
-            batch_records.append(comment)
+        batch_texts.append(text)
+        batch_records.append(comment)
 
-            # Process batch when full
-            if len(batch_texts) >= batch_size:
-                logger.info(f"Processing batch of {len(batch_texts)} texts, total indexed so far: {total_indexed}")
-                try:
-                    embeddings = embedder.embed_batch(batch_texts, is_query=False)
-                    logger.info(f"Successfully embedded {len(embeddings)} texts")
-                except Exception as e:
-                    logger.error(f"Error embedding batch: {e}", exc_info=True)
-                    raise
+        if len(batch_texts) >= batch_size:
+            embeddings = embedder.embed_batch(batch_texts, is_query=False)
+            _insert_batch(conn, batch_records, embeddings)
+            conn.commit()
 
-                for i, record in enumerate(batch_records):
-                    record["vector"] = embeddings[i].tolist()
-
-                # Write chunk to LanceDB (incremental)
-                try:
-                    if table is None:
-                        # First chunk: create table
-                        logger.info(f"Creating LanceDB table with {len(batch_records)} initial records")
-                        table = db.create_table("reviews", batch_records, mode="overwrite")
-                        logger.info("Table created successfully")
-                    else:
-                        # Subsequent chunks: add to table
-                        logger.info(f"Adding {len(batch_records)} records to existing table")
-                        table.add(batch_records)
-                        logger.info("Records added successfully")
-                except Exception as e:
-                    logger.error(f"Error writing to LanceDB: {e}", exc_info=True)
-                    raise
-
-                total_indexed += len(batch_records)
-                batch_texts = []
-                batch_records = []
-        except Exception as e:
-            logger.error(f"Error processing comment {comment.get('comment_id', 'unknown')}: {e}", exc_info=True)
-            raise
+            total_indexed += len(batch_records)
+            batch_texts = []
+            batch_records = []
 
     # Process remaining records
     if batch_texts:
-        logger.info(f"Processing final batch of {len(batch_texts)} texts")
-        try:
-            embeddings = embedder.embed_batch(batch_texts, is_query=False)
-            logger.info(f"Successfully embedded {len(embeddings)} final texts")
-            for i, record in enumerate(batch_records):
-                record["vector"] = embeddings[i].tolist()
+        embeddings = embedder.embed_batch(batch_texts, is_query=False)
+        _insert_batch(conn, batch_records, embeddings)
+        conn.commit()
+        total_indexed += len(batch_records)
 
-            if table is None:
-                logger.info(f"Creating LanceDB table with {len(batch_records)} records (final batch)")
-                table = db.create_table("reviews", batch_records, mode="overwrite")
-                logger.info("Table created successfully")
-            else:
-                logger.info(f"Adding final {len(batch_records)} records to table")
-                table.add(batch_records)
-                logger.info("Final records added successfully")
-
-            total_indexed += len(batch_records)
-        except Exception as e:
-            logger.error(f"Error processing final batch: {e}", exc_info=True)
-            raise
-
-    # Create full-text search index on body
-    if table is not None:
-        logger.info("Creating full-text search index")
-        table.create_fts_index("body", replace=True)
-        _write_index_meta(lance_path, config.embedding_model, total_indexed)
-        logger.info("Index built successfully")
+    if total_indexed > 0:
+        _write_index_meta(conn, config.embedding_model, total_indexed)
+        logger.info(f"Index built: {total_indexed} records")
     else:
         logger.warning("No records to index")
 
@@ -310,12 +417,17 @@ def build_index(
     return total_indexed
 
 
-def get_lance_table():
-    """Get the LanceDB table for querying."""
+def get_vec_connection() -> sqlite3.Connection:
+    """Get a sqlite3 connection with sqlite-vec loaded, for querying.
+
+    Checks that the index exists and the embedding model matches.
+    """
     config = get_config()
-    _check_index_model(config.lance_db_path, config.embedding_model)
-    db = lancedb.connect(str(config.lance_db_path))
-    return db.open_table("reviews")
+    conn = sqlite3.connect(config.sqlite_db_path)
+    conn.row_factory = sqlite3.Row
+    _load_vec(conn)
+    _check_index_model(conn, config.embedding_model)
+    return conn
 
 
 def index_stats() -> Dict[str, Any]:
@@ -323,19 +435,20 @@ def index_stats() -> Dict[str, Any]:
     config = get_config()
 
     stats = {
-        "lance_path": str(config.lance_db_path),
+        "db_path": str(config.sqlite_db_path),
         "exists": False,
         "num_records": 0,
     }
 
-    lance_path = config.lance_db_path / "reviews.lance"
-    if lance_path.exists():
-        stats["exists"] = True
-        try:
-            table = get_lance_table()
-            stats["num_records"] = len(table)
-        except Exception as e:
-            stats["error"] = str(e)
+    try:
+        conn = get_sqlite_connection()
+        if _vec_table_exists(conn):
+            stats["exists"] = True
+            row = conn.execute("SELECT count(*) FROM vec_reviews").fetchone()
+            stats["num_records"] = row[0]
+        conn.close()
+    except Exception as e:
+        stats["error"] = str(e)
 
     return stats
 

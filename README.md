@@ -28,7 +28,7 @@ When reviewing MicroPython PRs, an AI assistant needs to:
 ✅ Enhanced categorization schema design (13 fields)
 ✅ Manual validation (40 sample categorizations)
 ✅ Full categorization run (18,614 categorized comments)
-✅ Vector index built (LanceDB with Jina embeddings)
+✅ Vector index built (sqlite-vec with CodeRankEmbed embeddings)
 ✅ Semantic search validated and working
 ✅ CLI tool implementation (`mpy-reviewer`)
 
@@ -363,14 +363,12 @@ results = find_similar(diff_text, top_k=8)
 ```
 mpy-reviewer/
 ├── data/
-│   ├── reviews.db                   # SQLite database (source of truth)
-│   └── lance/                       # LanceDB vector index
-│       └── reviews.lance/
+│   └── reviews.db                   # SQLite database + vec0 index
 ├── rag/                             # RAG Python package
 │   ├── cli.py                       # CLI entry point
 │   ├── config.py                    # Configuration management
-│   ├── embeddings.py                # Jina embeddings wrapper
-│   ├── indexer.py                   # SQLite → LanceDB indexer
+│   ├── embeddings.py                # CodeRankEmbed embeddings wrapper
+│   ├── indexer.py                   # sqlite-vec index builder
 │   ├── retriever.py                 # Hybrid search (dense + FTS)
 │   ├── reranker.py                  # Cross-encoder re-ranking
 │   └── ...                          # Other modules

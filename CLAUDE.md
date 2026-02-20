@@ -18,22 +18,19 @@ This project creates a queryable RAG (Retrieval-Augmented Generation) system of 
 **Current Status:**
 - ✅ Data collection complete (22,805 comments from 5,542 PRs)
 - ✅ Categorization complete (18,614 categorized comments)
-- ✅ Vector index built (LanceDB with 768-dim embeddings)
+- ✅ Vector index built (sqlite-vec with 768-dim CodeRankEmbed embeddings)
 - ✅ Semantic search validated and working
 - ✅ CLI tools operational
 - ✅ MCP server with 6 tools (review_diff, review_pr, search_reviews, find_style_examples, get_review_stats, get_pr_review_history)
 - ✅ Claude Code skill available (fallback for non-MCP sessions)
 - ✅ Usage logging and performance analysis enabled
-- ⚠️ Index rebuild required after embedding model change (CodeRankEmbed)
 
 ## Directory Structure
 
 ```
 mpy-reviewer/
 ├── data/
-│   ├── reviews.db                 # SQLite database (source of truth)
-│   └── lance/                     # LanceDB vector index
-│       └── reviews.lance/
+│   └── reviews.db                 # SQLite database + vec0 vector index
 ├── mcp_server.py                  # FastMCP server (stdio transport)
 ├── rag/                           # RAG Python package
 │   ├── __init__.py
@@ -41,7 +38,7 @@ mpy-reviewer/
 │   ├── config.py                  # Configuration management
 │   ├── embeddings.py              # CodeRankEmbed embeddings wrapper
 │   ├── graph_expander.py          # Reply chain / PR context expansion
-│   ├── indexer.py                 # SQLite → LanceDB indexer
+│   ├── indexer.py                 # sqlite-vec index builder
 │   ├── retriever.py               # Hybrid search with heuristic boosting
 │   ├── reranker.py                # Cross-encoder re-ranking
 │   ├── codebase.py                # MicroPython codebase context
@@ -294,110 +291,11 @@ print(f'Categorized: {categorized}/{total} ({100*categorized/total:.1f}%)')
 
 For large datasets or memory-constrained systems, use the resume-capable indexing approach:
 
-```python
-#!/usr/bin/env python3
-"""Resume-capable index builder with memory management."""
-import logging
-import gc
-import os
-
-os.chdir('/home/anl/mpy/mpy-reviewer')
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logging.getLogger('transformers').setLevel(logging.WARNING)
-logger = logging.getLogger(__name__)
-
-import lancedb
-from rag.indexer import get_sqlite_connection, iter_all_comments, count_comments
-from rag.embeddings import get_embedder
-from rag.config import get_config
-from tqdm import tqdm
-
-config = get_config()
-db = lancedb.connect(str(config.lance_db_path))
-
-# Check for existing index
-try:
-    table = db.open_table("reviews")
-    existing = table.to_pandas()[['comment_id', 'comment_type']]
-    indexed_keys = set(zip(existing['comment_id'], existing['comment_type']))
-    logger.info(f"Resuming: {len(indexed_keys)} records already indexed")
-except:
-    table = None
-    indexed_keys = set()
-    logger.info("Starting fresh index build")
-
-conn = get_sqlite_connection()
-total = count_comments(conn)
-remaining = total - len(indexed_keys)
-logger.info(f"Total: {total}, Remaining: {remaining}")
-
-embedder = get_embedder()
-batch_size = 4  # Small batches for memory-constrained systems
-gc_interval = 50  # Force GC every N batches
-
-batch_texts = []
-batch_records = []
-processed = 0
-batch_count = 0
-
-for comment in tqdm(iter_all_comments(conn), total=total, desc="Indexing"):
-    key = (comment['comment_id'], comment['comment_type'])
-    if key in indexed_keys:
-        continue
-
-    text = comment["body"] or ""
-    if comment["diff_hunk"]:
-        text = f"{text}\n\nCode context:\n{comment['diff_hunk']}"
-
-    batch_texts.append(text)
-    batch_records.append(comment)
-
-    if len(batch_texts) >= batch_size:
-        embeddings = embedder.embed_batch(batch_texts)
-        for i, record in enumerate(batch_records):
-            record["vector"] = embeddings[i].tolist()
-
-        if table is None:
-            table = db.create_table("reviews", batch_records, mode="overwrite")
-        else:
-            table.add(batch_records)
-
-        processed += len(batch_records)
-        batch_count += 1
-
-        if batch_count % 25 == 0:
-            logger.info(f"Progress: {processed} new records (total: {len(indexed_keys) + processed})")
-
-        if batch_count % gc_interval == 0:
-            gc.collect()
-
-        batch_texts = []
-        batch_records = []
-
-# Process remaining
-if batch_texts:
-    embeddings = embedder.embed_batch(batch_texts)
-    for i, record in enumerate(batch_records):
-        record["vector"] = embeddings[i].tolist()
-    if table is None:
-        table = db.create_table("reviews", batch_records, mode="overwrite")
-    else:
-        table.add(batch_records)
-    processed += len(batch_records)
-
-logger.info(f"=== COMPLETE: {len(indexed_keys) + processed} total records indexed ===")
-
-# Create full-text search index (required for hybrid retrieval)
-if table is not None:
-    logger.info("Creating full-text search index on 'body' column...")
-    table.create_fts_index("body", replace=True)
-    logger.info("✓ Full-text search index created successfully")
-
-conn.close()
+```bash
+python scripts/build_index_resume.py
 ```
 
-Save as `scripts/build_index_resume.py` and run:
+Run with:
 
 ```bash
 source venv/bin/activate
@@ -412,7 +310,7 @@ tail -f logs/index_build.log
 - Time: ~5 hours for 18,614 records on CPU (WSL2, 45GB RAM)
 - Memory: ~6GB peak usage with batch_size=4
 - Speed: Variable 2-13 items/sec depending on text length
-- Model: CodeRankEmbed (768 dimensions, requires index rebuild)
+- Model: CodeRankEmbed (768 dimensions)
 
 ### Step 4: Verify the Index
 
@@ -425,14 +323,12 @@ mpy-reviewer search "memory allocation" -k 5
 
 # Python verification
 python -c "
-import lancedb
-db = lancedb.connect('data/lance')
-t = db.open_table('reviews')
-print(f'Total records: {len(t)}')
-print(f'Schema: {[f.name for f in t.schema]}')
-df = t.to_pandas()
-print(f'\\nDomain distribution:')
-print(df['domain'].value_counts().head(5))
+from rag.indexer import get_sqlite_connection, _vec_table_exists
+conn = get_sqlite_connection()
+print(f'Index exists: {_vec_table_exists(conn)}')
+row = conn.execute('SELECT count(*) FROM vec_reviews').fetchone()
+print(f'Total records: {row[0]}')
+conn.close()
 "
 ```
 
@@ -456,11 +352,12 @@ print(df['domain'].value_counts().head(5))
 - Links to comments via comment_id + comment_type
 - See Categorization Fields below
 
-### LanceDB Schema (data/lance/reviews.lance)
+### vec0 Virtual Table (vec_reviews in reviews.db)
 
-All categorization fields plus:
-- `vector`: 768-dimensional Jina embedding
-- Full-text search index on `body` field
+All categorization fields stored as vec0 metadata or auxiliary columns, plus:
+- `embedding`: 768-dimensional CodeRankEmbed vector (cosine distance)
+- FTS5 index on `body` field (contentless `review_fts` table)
+- Index metadata in `vec_index_meta` table
 
 ### Categorization Fields (13 total)
 
@@ -543,17 +440,17 @@ The resume-capable script above handles this automatically.
 
 ### Slow Indexing on CPU
 
-This is expected. CPU-only embedding with Jina v2 Base Code processes 2-13 items/sec. For 18,614 records:
+This is expected. CPU-only embedding with CodeRankEmbed processes 2-13 items/sec. For 18,614 records:
 - Expected time: 4-6 hours
 - The script supports resume, so interruptions are safe
 
-### LanceDB Table Not Found
+### Vector Index Not Found
 
-If the index doesn't exist yet:
+If the vec_reviews table doesn't exist yet:
 
 ```bash
 # Check if table exists
-python -c "import lancedb; db = lancedb.connect('data/lance'); print(db.table_names())"
+python -c "from rag.indexer import get_sqlite_connection, _vec_table_exists; conn = get_sqlite_connection(); print(_vec_table_exists(conn))"
 
 # Build or rebuild the index
 python scripts/build_index_resume.py
@@ -561,21 +458,14 @@ python scripts/build_index_resume.py
 
 ### Full-Text Search Error
 
-If you get an error like:
-```
-RuntimeError: lance error: Invalid user input: Cannot perform full text search unless an INVERTED index has been created
-```
-
-The LanceDB table is missing the full-text search (FTS) index. This happens if the index was built before FTS indexing was added. Fix it with:
+If the FTS5 index is missing or corrupted, rebuild it:
 
 ```bash
 source venv/bin/activate
 python scripts/add_fts_index.py
 ```
 
-This adds the FTS index to the existing table without rebuilding embeddings (takes ~5 seconds).
-
-**Note:** `scripts/build_index_resume.py` and `mpy-reviewer index` now automatically create the FTS index, so this should only be needed for indices built with older versions.
+This rebuilds the FTS5 index from vec_reviews data without re-embedding (takes ~5 seconds).
 
 ### Claude CLI Categorization Errors
 
@@ -606,7 +496,7 @@ Query Text
     ├──► Dense Search (CodeRankEmbed → cosine similarity)
     │         └─► Top 100 candidates
     │
-    ├──► Full-Text Search (LanceDB FTS on body field)
+    ├──► Full-Text Search (FTS5 on body field)
     │         └─► Top 100 candidates
     │
     └──► Metadata Filters (domain, severity, component, language)
@@ -635,7 +525,7 @@ Query Text
 | File | Purpose |
 |------|---------|
 | `mcp_server.py` | FastMCP server (6 tools, stdio transport) |
-| `rag/indexer.py` | SQLite → LanceDB vector index builder |
+| `rag/indexer.py` | sqlite-vec index builder (vec0 + FTS5) |
 | `rag/embeddings.py` | CodeRankEmbed embeddings (query/doc distinction) |
 | `rag/retriever.py` | Hybrid dense+FTS search with heuristic boosting |
 | `rag/graph_expander.py` | Reply chain, PR sibling, and file-level expansion |
@@ -650,13 +540,11 @@ Query Text
 ## Dependencies
 
 Core:
-- `lancedb>=0.4.0` - Vector database
-- `transformers>=4.36.0` - Jina model loading
+- `sqlite-vec>=0.1.6` - Vector search extension for SQLite
+- `transformers>=4.36.0` - Model loading
 - `torch>=2.0.0` - PyTorch (CPU or CUDA)
 - `click>=8.0.0` - CLI framework
 - `tqdm` - Progress bars
-- `pyarrow` - LanceDB backend
 
 Optional:
 - `sentence-transformers` - For cross-encoder re-ranking
-- `pandas` - For data inspection (used during resume indexing)

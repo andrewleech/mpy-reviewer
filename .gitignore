@@ -34,6 +34,9 @@ tests/
 .idea/
 .vscode/
 
+# Removed data stores
+data/lance/
+
 # OS
 .DS_Store
 Thumbs.db

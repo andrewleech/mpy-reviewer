@@ -43,9 +43,9 @@ def _get_retriever():
     if _retriever is None:
         from rag.retriever import ReviewRetriever
         _retriever = ReviewRetriever()
-        # Force eager load of embedder and table so first query is warm
+        # Force eager load of embedder and connection so first query is warm
         _ = _retriever.embedder
-        _ = _retriever.table
+        _ = _retriever.conn
         logger.info("Retriever initialized (model warm)")
     return _retriever
 

@@ -1,20 +1,20 @@
 """Multi-stage hybrid retrieval for MicroPython reviews."""
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import logging
 import os
-
 import re
+import sqlite3
 
 import numpy as np
 
 from .config import get_config
 from .embeddings import get_embedder
-from .indexer import get_lance_table
+from .indexer import get_vec_connection, _row_to_dict, _ALL_COLS
 
 logger = logging.getLogger(__name__)
 
-# Columns that are valid filter targets in LanceDB queries.
+# Columns that are valid filter targets in vec0 KNN WHERE clauses.
 _ALLOWED_FILTER_KEYS = frozenset({
     "domain", "severity", "component", "port", "subsystem",
     "language_context", "code_construct", "concern_type", "feedback_type",
@@ -22,6 +22,28 @@ _ALLOWED_FILTER_KEYS = frozenset({
 
 # Pattern for safe filter values: alphanumeric, underscores, hyphens.
 _SAFE_VALUE_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+# FTS5 special characters that need quoting.
+_FTS5_SPECIAL = re.compile(r'["\(\)\*:]')
+
+
+def _sanitize_fts_query(query: str) -> str:
+    """Sanitize a query string for FTS5 MATCH.
+
+    Wraps individual terms in double-quotes and joins with OR
+    to avoid FTS5 syntax errors from special characters.
+    """
+    # Split into words, strip punctuation
+    terms = query.split()
+    quoted = []
+    for term in terms:
+        # Remove characters that are problematic inside FTS5 double-quoted strings
+        clean = term.replace('"', '').strip()
+        if clean:
+            quoted.append(f'"{clean}"')
+    if not quoted:
+        return '""'
+    return " OR ".join(quoted)
 
 
 def _path_overlap(review_path: str, diff_path: str) -> bool:
@@ -71,14 +93,14 @@ class ReviewRetriever:
     """Hybrid retrieval combining dense and full-text search."""
 
     def __init__(self):
-        self._table = None
+        self._conn = None
         self._embedder = None
 
     @property
-    def table(self):
-        if self._table is None:
-            self._table = get_lance_table()
-        return self._table
+    def conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            self._conn = get_vec_connection()
+        return self._conn
 
     @property
     def embedder(self):
@@ -94,8 +116,11 @@ class ReviewRetriever:
     ) -> List[Dict[str, Any]]:
         """Search using dense embeddings only."""
         query_embedding = self.embedder.embed_single(query, is_query=True)
+        query_bytes = query_embedding.astype(np.float32).tobytes()
 
-        search = self.table.search(query_embedding).limit(top_k)
+        # Build the KNN query with optional metadata filters
+        where_clauses = ["embedding MATCH ?", "k = ?"]
+        params: list = [query_bytes, top_k]
 
         if filter_dict:
             for key, value in filter_dict.items():
@@ -105,13 +130,20 @@ class ReviewRetriever:
                 if not _SAFE_VALUE_RE.match(str(value)):
                     logger.warning(f"Ignoring unsafe filter value for {key}: {value!r}")
                     continue
-                search = search.where(f"{key} = '{value}'")
+                where_clauses.append(f"{key} = ?")
+                params.append(str(value))
 
-        results = search.to_list()
+        col_list = ", ".join(_ALL_COLS)
+        where = " AND ".join(where_clauses)
+        sql = f"SELECT rowid, distance, {col_list} FROM vec_reviews WHERE {where}"
 
-        for i, result in enumerate(results):
-            result["rank"] = i + 1
-            result["search_type"] = "dense"
+        cursor = self.conn.execute(sql, params)
+        results = []
+        for i, row in enumerate(cursor):
+            d = _row_to_dict(row)
+            d["rank"] = i + 1
+            d["search_type"] = "dense"
+            results.append(d)
 
         return results
 
@@ -121,11 +153,39 @@ class ReviewRetriever:
         top_k: int = 100,
     ) -> List[Dict[str, Any]]:
         """Search using full-text search only."""
-        results = self.table.search(query, query_type="fts").limit(top_k).to_list()
+        sanitized = _sanitize_fts_query(query)
 
-        for i, result in enumerate(results):
-            result["rank"] = i + 1
-            result["search_type"] = "fts"
+        # Get rowids and ranks from FTS5
+        fts_sql = "SELECT rowid, rank FROM review_fts WHERE review_fts MATCH ? ORDER BY rank LIMIT ?"
+        fts_rows = self.conn.execute(fts_sql, [sanitized, top_k]).fetchall()
+
+        if not fts_rows:
+            return []
+
+        rowids = [r[0] for r in fts_rows]
+        rank_map = {r[0]: r[1] for r in fts_rows}
+
+        # Fetch full records from vec_reviews
+        col_list = ", ".join(_ALL_COLS)
+        placeholders = ", ".join(["?"] * len(rowids))
+        vec_sql = f"SELECT rowid, {col_list} FROM vec_reviews WHERE rowid IN ({placeholders})"
+        vec_rows = self.conn.execute(vec_sql, rowids).fetchall()
+
+        # Build dict keyed by rowid for ordering
+        row_map = {}
+        for row in vec_rows:
+            d = _row_to_dict(row)
+            d["fts_rank"] = rank_map.get(row["rowid"], 0)
+            row_map[row["rowid"]] = d
+
+        # Return in FTS rank order
+        results = []
+        for i, rowid in enumerate(rowids):
+            if rowid in row_map:
+                d = row_map[rowid]
+                d["rank"] = i + 1
+                d["search_type"] = "fts"
+                results.append(d)
 
         return results
 
@@ -152,27 +212,31 @@ class ReviewRetriever:
         result_lists: List[List[Dict[str, Any]]],
         k: int = 60,
     ) -> List[Dict[str, Any]]:
-        """Combine multiple result lists using Reciprocal Rank Fusion."""
-        scores: Dict[int, float] = {}
-        records: Dict[int, Dict[str, Any]] = {}
+        """Combine multiple result lists using Reciprocal Rank Fusion.
+
+        Keys by (comment_id, comment_type) to correctly handle
+        different comment types with the same numeric id.
+        """
+        scores: Dict[Tuple, float] = {}
+        records: Dict[Tuple, Dict[str, Any]] = {}
 
         for results in result_lists:
             for result in results:
-                comment_id = result["comment_id"]
+                key = (result["comment_id"], result["comment_type"])
                 rank = result["rank"]
 
-                if comment_id not in scores:
-                    scores[comment_id] = 0.0
-                    records[comment_id] = result
+                if key not in scores:
+                    scores[key] = 0.0
+                    records[key] = result
 
-                scores[comment_id] += 1.0 / (k + rank)
+                scores[key] += 1.0 / (k + rank)
 
-        sorted_ids = sorted(scores.keys(), key=lambda x: -scores[x])
+        sorted_keys = sorted(scores.keys(), key=lambda x: -scores[x])
 
         fused_results = []
-        for i, comment_id in enumerate(sorted_ids):
-            record = records[comment_id].copy()
-            record["rrf_score"] = scores[comment_id]
+        for i, key in enumerate(sorted_keys):
+            record = records[key].copy()
+            record["rrf_score"] = scores[key]
             record["rank"] = i + 1
             record["search_type"] = "hybrid"
             fused_results.append(record)
@@ -254,7 +318,7 @@ class ReviewRetriever:
             if prefer_style_examples and result.get("is_style_example"):
                 score *= 1.2
 
-            # File-path affinity boost (column is "file_path" in LanceDB)
+            # File-path affinity boost
             review_path = result.get("file_path") or result.get("path")
             if diff_files and review_path:
                 score *= _path_affinity_score(review_path, diff_files)

@@ -161,8 +161,8 @@ Task Instructions
 | `rag/fusion.py` | Result fusion from multiple sources | ✅ Complete |
 | `rag/prompt_builder.py` | Prompt assembly | ✅ Complete |
 | `rag/evaluator.py` | Evaluation metrics and dataset building | ✅ Complete |
-| `rag/embeddings.py` | Jina embedding generation | ✅ Complete |
-| `rag/indexer.py` | LanceDB index building | ✅ Complete |
+| `rag/embeddings.py` | CodeRankEmbed embedding generation | ✅ Complete |
+| `rag/indexer.py` | sqlite-vec index building | ✅ Complete |
 | `rag/config.py` | Configuration management | ✅ Complete |
 | `rag/cli.py` | Command-line interface | ✅ Complete |
 
@@ -170,14 +170,13 @@ Task Instructions
 
 | Path | Contents | Size |
 |------|----------|------|
-| `data/reviews.db` | SQLite database: 18,614 comments | 29 MB |
-| `data/lance/` | LanceDB vector index | ~80 MB |
+| `data/reviews.db` | SQLite database with vec0 index: 18,614 comments | ~140 MB |
 
 ### Key Models
 
 | Model | Purpose | Dimensions | Context |
 |-------|---------|-----------|---------|
-| jinaai/jina-embeddings-v2-base-code | Embedding generation | 768 | 8K tokens |
+| nomic-ai/CodeRankEmbed | Embedding generation | 768 | 8K tokens |
 | BAAI/bge-reranker-large | Cross-encoder scoring | - | - |
 
 ## Database Schema
@@ -266,9 +265,9 @@ mpy-reviewer eval metrics --results-dir eval/results
 ## Performance Characteristics
 
 ### Indexing
-- **Time**: 2-3 hours on CPU, 15-20 minutes on GPU
-- **Disk**: ~80 MB for LanceDB index
-- **Memory**: 10-15 GB during building
+- **Time**: ~5 hours on CPU, faster on GPU
+- **Disk**: ~110 MB added to reviews.db for vec0 + FTS5 tables
+- **Memory**: ~6 GB peak with batch_size=4
 
 ### Retrieval
 - **First query**: ~2-3 seconds (model loading)
@@ -291,11 +290,10 @@ Edit configuration in `rag/config.py`:
 class Config:
     # Paths
     sqlite_db_path: Path  # Default: data/reviews.db
-    lance_db_path: Path  # Default: data/lance/
     micropython_repo_path: Path  # Default: /home/corona/mpy/review
 
     # Models
-    embedding_model: str = "jinaai/jina-embeddings-v2-base-code"
+    embedding_model: str = "nomic-ai/CodeRankEmbed"
     reranker_model: str = "BAAI/bge-reranker-large"
 
     # Retrieval
@@ -456,11 +454,11 @@ for r in results:
 - 768 dimensions (good quality/speed balance)
 - Local execution (privacy, no external APIs)
 
-### Why LanceDB?
-- Embedded vector database (no server)
-- Hybrid search (dense + FTS)
-- Portable (copy directory)
-- Good performance on moderate-scale data
+### Why sqlite-vec?
+- Vectors stored alongside review data in a single SQLite database
+- Brute-force KNN in ~16 ms at this scale (faster than LanceDB's ~553 ms)
+- Minimal dependencies (single extension, no pyarrow)
+- ~200 MB less RAM usage than LanceDB
 
 ### Why Reciprocal Rank Fusion?
 - Simple, effective fusion strategy

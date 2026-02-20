@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Resume-capable index builder with memory management.
 
-This script builds the LanceDB vector index from categorized comments in SQLite.
+This script builds the sqlite-vec vector index from categorized comments in SQLite.
 It supports resuming from interruptions and uses aggressive memory management
 for systems with limited RAM.
 
@@ -40,11 +40,12 @@ logging.getLogger('transformers').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-# Import after chdir so relative paths work
-import lancedb
 from tqdm import tqdm
 
-from rag.indexer import get_sqlite_connection, iter_all_comments, count_comments
+from rag.indexer import (
+    get_sqlite_connection, iter_all_comments, count_comments,
+    _ensure_tables, _insert_batch, _write_index_meta, _vec_table_exists,
+)
 from rag.embeddings import get_embedder
 from rag.config import get_config
 
@@ -62,21 +63,22 @@ def build_index_with_resume(
         progress_interval: Log progress every N batches
     """
     config = get_config()
-    db = lancedb.connect(str(config.lance_db_path))
+    conn = get_sqlite_connection()
 
-    # Check for existing index
-    try:
-        table = db.open_table("reviews")
-        existing = table.to_pandas()[['comment_id', 'comment_type']]
-        indexed_keys = set(zip(existing['comment_id'], existing['comment_type']))
+    # Ensure tables exist
+    _ensure_tables(conn)
+
+    # Check for existing indexed records
+    indexed_keys = set()
+    if _vec_table_exists(conn):
+        cursor = conn.execute("SELECT comment_id, comment_type FROM vec_reviews")
+        for row in cursor:
+            indexed_keys.add((row[0], row[1]))
         logger.info(f"Resuming: {len(indexed_keys)} records already indexed")
-    except Exception:
-        table = None
-        indexed_keys = set()
+    else:
         logger.info("Starting fresh index build")
 
     # Get counts
-    conn = get_sqlite_connection()
     total = count_comments(conn)
     remaining = total - len(indexed_keys)
     logger.info(f"Total categorized: {total}, Remaining to index: {remaining}")
@@ -115,15 +117,11 @@ def build_index_with_resume(
 
         if len(batch_texts) >= batch_size:
             # Embed batch
-            embeddings = embedder.embed_batch(batch_texts)
-            for i, record in enumerate(batch_records):
-                record["vector"] = embeddings[i].tolist()
+            embeddings = embedder.embed_batch(batch_texts, is_query=False)
 
-            # Write to LanceDB
-            if table is None:
-                table = db.create_table("reviews", batch_records, mode="overwrite")
-            else:
-                table.add(batch_records)
+            # Write to sqlite-vec
+            _insert_batch(conn, batch_records, embeddings)
+            conn.commit()
 
             processed += len(batch_records)
             batch_count += 1
@@ -142,32 +140,20 @@ def build_index_with_resume(
 
     # Process remaining records
     if batch_texts:
-        embeddings = embedder.embed_batch(batch_texts)
-        for i, record in enumerate(batch_records):
-            record["vector"] = embeddings[i].tolist()
-
-        if table is None:
-            table = db.create_table("reviews", batch_records, mode="overwrite")
-        else:
-            table.add(batch_records)
-
+        embeddings = embedder.embed_batch(batch_texts, is_query=False)
+        _insert_batch(conn, batch_records, embeddings)
+        conn.commit()
         processed += len(batch_records)
 
     pbar.close()
-    conn.close()
 
     total_indexed = len(indexed_keys) + processed
     logger.info(f"=== COMPLETE: {total_indexed} total records indexed ===")
 
-    # Create full-text search index
-    if table is not None:
-        logger.info("Creating full-text search index on 'body' column...")
-        try:
-            table.create_fts_index("body", replace=True)
-            logger.info("✓ Full-text search index created successfully")
-        except Exception as e:
-            logger.warning(f"Failed to create FTS index (non-fatal): {e}")
+    # Write metadata
+    _write_index_meta(conn, config.embedding_model, total_indexed)
 
+    conn.close()
     return total_indexed
 
 
@@ -176,7 +162,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Build LanceDB vector index with resume capability"
+        description="Build sqlite-vec vector index with resume capability"
     )
     parser.add_argument(
         "--batch-size", type=int, default=4,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add full-text search index to existing LanceDB table."""
+"""Rebuild FTS5 index from existing vec_reviews data."""
 
 import logging
 import sys
@@ -8,8 +8,7 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import lancedb
-from rag.config import get_config
+from rag.indexer import get_sqlite_connection, _vec_table_exists
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,29 +17,44 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def add_fts_index():
-    """Add FTS index to existing table."""
-    config = get_config()
+def rebuild_fts_index():
+    """Rebuild the FTS5 index from vec_reviews body column."""
+    conn = get_sqlite_connection()
 
-    logger.info(f"Connecting to LanceDB at {config.lance_db_path}")
-    db = lancedb.connect(str(config.lance_db_path))
-
-    try:
-        table = db.open_table("reviews")
-        logger.info(f"Found table with {len(table)} records")
-    except Exception as e:
-        logger.error(f"Failed to open table: {e}")
+    if not _vec_table_exists(conn):
+        logger.error("vec_reviews table not found. Build the index first.")
+        conn.close()
         return 1
 
-    logger.info("Creating full-text search index on 'body' column...")
-    try:
-        table.create_fts_index("body", replace=True)
-        logger.info("✓ Full-text search index created successfully")
-        return 0
-    except Exception as e:
-        logger.error(f"Failed to create FTS index: {e}")
-        return 1
+    count = conn.execute("SELECT count(*) FROM vec_reviews").fetchone()[0]
+    logger.info(f"Found {count} records in vec_reviews")
+
+    logger.info("Dropping existing FTS index if present...")
+    conn.execute("DROP TABLE IF EXISTS review_fts")
+    conn.commit()
+
+    logger.info("Creating FTS5 table...")
+    conn.execute("""
+        CREATE VIRTUAL TABLE review_fts USING fts5(
+            body,
+            content='',
+            content_rowid='rowid'
+        )
+    """)
+
+    logger.info("Populating FTS index from vec_reviews...")
+    conn.execute("""
+        INSERT INTO review_fts (rowid, body)
+        SELECT rowid, body FROM vec_reviews
+    """)
+    conn.commit()
+
+    fts_count = conn.execute("SELECT count(*) FROM review_fts").fetchone()[0]
+    logger.info(f"FTS index rebuilt with {fts_count} records")
+
+    conn.close()
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(add_fts_index())
+    sys.exit(rebuild_fts_index())
