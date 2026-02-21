@@ -80,12 +80,16 @@ def review_diff(
     diff_text: str,
     top_k: int = 8,
     include_codebase: bool = False,
-) -> dict:
+) -> str:
     """Review a code diff using historical MicroPython review patterns.
 
     Primary entry point for code review. Accepts raw unified diff text,
-    retrieves relevant past review examples, and returns both a formatted
-    review prompt and the raw example list.
+    retrieves relevant past review examples, writes each example to a
+    temp file, and returns a compact orchestration prompt with file paths.
+
+    The calling agent already has the diff in context so it is not echoed
+    back. Example files contain full diff_hunks and thread context with
+    no truncation.
 
     Args:
         diff_text: Unified diff text to review.
@@ -93,9 +97,69 @@ def review_diff(
         include_codebase: Include MicroPython codebase context (slower).
 
     Returns:
-        Dict with 'prompt' (formatted review prompt) and 'examples' (raw list).
+        Markdown orchestration prompt (~5-8K chars) with a summary table
+        of temp files, the style guide, and workflow instructions.
     """
-    from rag.prompt_builder import ReviewContext
+    retriever = _get_retriever()
+    builder = _get_builder()
+
+    files_changed = _extract_files_from_diff(diff_text)
+
+    results = retriever.get_similar_reviews(
+        diff_text, top_k=top_k, diff_files=files_changed,
+    )
+
+    codebase_context = None
+    if include_codebase:
+        try:
+            from rag.codebase import get_codebase_retriever
+            codebase_context = get_codebase_retriever().get_context_for_diff(
+                diff_text, top_k=5,
+            )
+        except Exception as e:
+            logger.warning(f"Codebase context failed: {e}")
+
+    _temp_dir, file_infos = builder.write_example_files(results)
+
+    prompt = builder.build_orchestration_prompt(
+        file_infos=file_infos,
+        files_changed=files_changed,
+        codebase_context=codebase_context,
+    )
+
+    return prompt
+
+
+@mcp.tool()
+def review_pr(
+    pr_number: int,
+    top_k: int = 8,
+    include_codebase: bool = False,
+) -> str:
+    """Review a GitHub PR by number using historical MicroPython review patterns.
+
+    Fetches the PR diff from micropython/micropython via gh CLI, then
+    retrieves relevant past review examples and writes them to temp files.
+
+    Args:
+        pr_number: GitHub PR number from micropython/micropython.
+        top_k: Number of review examples to retrieve (default 8).
+        include_codebase: Include MicroPython codebase context (slower).
+
+    Returns:
+        Markdown orchestration prompt with file paths and style guide.
+    """
+    result = subprocess.run(
+        ["gh", "pr", "diff", str(pr_number), "--repo", "micropython/micropython"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return json.dumps({"error": f"Failed to fetch PR diff: {result.stderr.strip()}"})
+
+    diff_text = result.stdout
+    if not diff_text.strip():
+        return json.dumps({"error": f"PR #{pr_number} has an empty diff"})
 
     retriever = _get_retriever()
     builder = _get_builder()
@@ -116,60 +180,14 @@ def review_diff(
         except Exception as e:
             logger.warning(f"Codebase context failed: {e}")
 
-    context = ReviewContext(
-        diff_text=diff_text,
-        review_examples=results,
-        codebase_context=codebase_context,
+    _temp_dir, file_infos = builder.write_example_files(results)
+
+    return builder.build_orchestration_prompt(
+        file_infos=file_infos,
         files_changed=files_changed,
+        pr_number=pr_number,
+        codebase_context=codebase_context,
     )
-    prompt = builder.build_review_prompt(context)
-
-    return {
-        "prompt": prompt,
-        "examples": _serialize_results(results),
-        "files_changed": files_changed,
-        "example_count": len(results),
-    }
-
-
-@mcp.tool()
-def review_pr(
-    pr_number: int,
-    top_k: int = 8,
-    include_codebase: bool = False,
-) -> dict:
-    """Review a GitHub PR by number using historical MicroPython review patterns.
-
-    Fetches the PR diff from micropython/micropython via gh CLI, then
-    retrieves relevant past review examples.
-
-    Args:
-        pr_number: GitHub PR number from micropython/micropython.
-        top_k: Number of review examples to retrieve (default 8).
-        include_codebase: Include MicroPython codebase context (slower).
-
-    Returns:
-        Dict with 'prompt', 'examples', 'pr_number', and 'files_changed'.
-    """
-    result = subprocess.run(
-        ["gh", "pr", "diff", str(pr_number), "--repo", "micropython/micropython"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return {"error": f"Failed to fetch PR diff: {result.stderr.strip()}"}
-
-    diff_text = result.stdout
-    if not diff_text.strip():
-        return {"error": f"PR #{pr_number} has an empty diff"}
-
-    review_result = review_diff(
-        diff_text=diff_text,
-        top_k=top_k,
-        include_codebase=include_codebase,
-    )
-    review_result["pr_number"] = pr_number
-    return review_result
 
 
 @mcp.tool()

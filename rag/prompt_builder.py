@@ -2,7 +2,11 @@
 
 from typing import List, Dict, Any, Optional
 import logging
+import os
+import re
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +299,198 @@ filler or compliments."""
                 remaining_budget -= section_tokens
 
         return "\n\n# ".join([first] + kept_middle + [last])
+
+    # --- File-based orchestration for MCP ---
+
+    def write_example_files(
+        self,
+        examples: List[Dict[str, Any]],
+        temp_dir: Optional[str] = None,
+    ) -> tuple:
+        """Write each review example to its own markdown file.
+
+        Args:
+            examples: Retrieved review examples.
+            temp_dir: Directory to write files to. Created if None.
+
+        Returns:
+            (temp_dir, file_infos) where file_infos is a list of dicts
+            with keys: path, index, severity, domain, theme, size_bytes.
+        """
+        if temp_dir is None:
+            temp_dir = tempfile.mkdtemp(prefix="mpy-review-")
+
+        file_infos = []
+        for i, example in enumerate(examples, 1):
+            severity = example.get("severity", "unknown")
+            domain = example.get("domain", "unknown")
+            # Sanitize for filename
+            safe_sev = re.sub(r"[^a-z0-9_-]", "", severity)
+            safe_dom = re.sub(r"[^a-z0-9_-]", "", domain)
+            filename = f"ex-{i}-{safe_sev}-{safe_dom}.md"
+            filepath = os.path.join(temp_dir, filename)
+
+            content = self._format_example_file(i, example)
+            with open(filepath, "w") as f:
+                f.write(content)
+
+            file_infos.append({
+                "path": filepath,
+                "index": i,
+                "severity": severity,
+                "domain": domain,
+                "theme": example.get("theme", ""),
+                "size_bytes": len(content.encode("utf-8")),
+            })
+
+        return temp_dir, file_infos
+
+    def _format_example_file(self, index: int, example: Dict[str, Any]) -> str:
+        """Format a single review example as a standalone markdown file."""
+        severity = example.get("severity", "N/A")
+        domain = example.get("domain", "N/A")
+        file_path = example.get("file_path") or example.get("path") or ""
+        pr_number = example.get("pr_number", "")
+        comment_id = example.get("comment_id", "")
+
+        lines = [
+            f"# Review Example {index}: {severity} / {domain}",
+            f"- PR: #{pr_number}" if pr_number else "",
+            f"- File: `{file_path}`" if file_path else "",
+            f"- Comment ID: {comment_id}" if comment_id else "",
+        ]
+        lines = [l for l in lines if l]  # drop empty
+
+        score = example.get("rrf_score") or example.get("rerank_score")
+        if score:
+            lines.append(f"- Relevance: {score:.2%}")
+
+        tags = []
+        if example.get("is_style_example"):
+            tags.append("style example")
+        if example.get("is_pattern"):
+            tags.append("reusable pattern")
+        if example.get("has_code_suggestion"):
+            tags.append("includes code suggestion")
+        if tags:
+            lines.append(f"- Tags: {', '.join(tags)}")
+
+        lines.append("")
+        lines.append("## Reviewer Feedback")
+        lines.append(example.get("body", ""))
+
+        if example.get("diff_hunk"):
+            lines.append("")
+            lines.append("## Original Code Context")
+            lines.append("```diff")
+            lines.append(example["diff_hunk"])
+            lines.append("```")
+
+        if example.get("thread"):
+            lines.append("")
+            lines.append("## Thread Context")
+            for msg in example["thread"]:
+                body = msg.get("body", "")
+                lines.append(f"> {body}")
+                lines.append("")
+
+        lines.append("")
+        return "\n".join(lines)
+
+    def build_orchestration_prompt(
+        self,
+        file_infos: List[Dict[str, Any]],
+        files_changed: Optional[List[str]] = None,
+        pr_number: Optional[int] = None,
+        codebase_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Build a compact orchestration prompt with file paths and style guide.
+
+        This replaces the monolithic prompt for MCP usage. The calling agent
+        already has the diff in its context, so we don't echo it back.
+
+        Args:
+            file_infos: List of dicts from write_example_files.
+            files_changed: File paths from the diff (for reference).
+            pr_number: PR number if reviewing a PR.
+            codebase_context: Optional codebase context dict.
+        """
+        sections = []
+
+        sections.append("# MicroPython Review Context")
+
+        if pr_number:
+            sections.append(f"\nReviewing PR #{pr_number}")
+        if files_changed:
+            sections.append(f"\nFiles in diff: {', '.join(files_changed)}")
+
+        # Example summary table
+        sections.append("")
+        sections.append("## Retrieved Examples")
+        sections.append("")
+        sections.append("| # | File | Size | Severity | Domain | Summary |")
+        sections.append("|---|------|------|----------|--------|---------|")
+        for info in file_infos:
+            size = _format_size(info["size_bytes"])
+            theme = info.get("theme", "")
+            if len(theme) > 50:
+                theme = theme[:47] + "..."
+            sections.append(
+                f"| {info['index']} | `{info['path']}` | {size} "
+                f"| {info['severity']} | {info['domain']} | {theme} |"
+            )
+
+        # Codebase context (inline, usually small)
+        if codebase_context:
+            sections.append("")
+            sections.append(self._format_codebase_context(codebase_context))
+
+        # Style guide (always included)
+        sections.append("")
+        sections.append(STYLE_GUIDE)
+
+        # Workflow instructions
+        sections.append("")
+        sections.append(self._format_orchestration_task())
+
+        return "\n".join(sections)
+
+    def _format_orchestration_task(self) -> str:
+        return """## Suggested Workflow
+
+You already have the project diff in context. The files above contain
+past review examples with their original code context (diff hunks).
+
+- For small files (<2KB): read directly with the Read tool
+- For large files (>2KB): consider spawning agents to evaluate the
+  project diff against each reference file in parallel
+- Assemble individual findings into a final review
+
+## Your Task
+
+Review the code diff in dpgeorge's style. Be direct, technical, and concise.
+
+For each issue found, provide:
+1. The file and line/hunk reference
+2. Severity: **Blocking** / **Suggestion** / **Nitpick**
+3. The feedback itself — terse for nitpicks, detailed for blocking issues
+
+Prioritize:
+- Correctness: logic bugs, edge cases, error handling
+- Memory: embedded constraints, allocation, leaks
+- API design: clean interfaces, backwards compatibility
+- Code style: MicroPython conventions
+- Portability: cross-platform assumptions
+
+Match the tone and brevity of the examples. Do not pad feedback with
+filler or compliments."""
+
+
+def _format_size(size_bytes: int) -> str:
+    """Format byte count as human-readable size."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    return f"{size_bytes / 1024:.1f} KB"
 
 
 # Global prompt builder instance

@@ -25,6 +25,14 @@ This project creates a queryable RAG (Retrieval-Augmented Generation) system of 
 - ✅ Claude Code skill available (fallback for non-MCP sessions)
 - ✅ Usage logging and performance analysis enabled
 
+**MCP Output Architecture:**
+The `review_diff` and `review_pr` MCP tools use a file-based output strategy to stay within Claude Code's 25K-token MCP result limit. Instead of returning a monolithic JSON blob with inline examples and duplicated diff text, they:
+1. Write each retrieved review example to its own temp file under `/tmp/mpy-review-*/`
+2. Return a compact orchestration prompt (~5-8K chars) containing a summary table of file paths/sizes, the style guide, and workflow instructions
+3. The calling agent reads example files as needed — small ones directly, large ones via subagents
+
+This avoids echoing the diff (already in the caller's context) and eliminates data duplication between `prompt` and `examples` fields.
+
 ## Directory Structure
 
 ```
