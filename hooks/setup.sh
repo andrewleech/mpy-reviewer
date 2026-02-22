@@ -8,14 +8,27 @@ PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-.}"
 
 VENV_DIR="$PLUGIN_ROOT/venv"
 
-if [ ! -d "$VENV_DIR" ]; then
-    echo "Creating Python virtual environment..."
-    python3 -m venv "$VENV_DIR"
-fi
-
-if ! "$VENV_DIR/bin/python" -c "import rag" 2>/dev/null; then
-    echo "Installing mpy-reviewer package..."
-    "$VENV_DIR/bin/pip" install -e "$PLUGIN_ROOT" --quiet
+if command -v uv &>/dev/null; then
+    # uv manages the venv and install in one step
+    if [ ! -d "$VENV_DIR" ] || ! "$VENV_DIR/bin/python" -c "import rag" 2>/dev/null; then
+        echo "Installing mpy-reviewer package via uv..."
+        uv sync --project "$PLUGIN_ROOT" --python-preference system
+    fi
+elif command -v pip &>/dev/null || command -v pip3 &>/dev/null; then
+    if [ ! -d "$VENV_DIR" ]; then
+        echo "Creating Python virtual environment..."
+        python3 -m venv "$VENV_DIR"
+    fi
+    if ! "$VENV_DIR/bin/python" -c "import rag" 2>/dev/null; then
+        echo "Installing mpy-reviewer package via pip..."
+        "$VENV_DIR/bin/pip" install -e "$PLUGIN_ROOT" --quiet
+    fi
+else
+    echo ""
+    echo "ERROR: Neither uv nor pip found. Install uv to use mpy-reviewer:"
+    echo "  curl -LsSf https://astral.sh/uv/install.sh | sh"
+    echo ""
+    exit 1
 fi
 
 # --- codanna (semantic code search) ---
