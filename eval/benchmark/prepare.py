@@ -170,13 +170,13 @@ def generate_rag_prompt(diff_text: str, pr_number: int) -> str:
     reranker = get_reranker()
     results = reranker.rerank(diff_text, results, top_k=top_k)
 
-    # Get codebase context (optional — codanna may not be available as Python module)
+    # Get codebase context (optional — degrades gracefully when codanna/repo unavailable)
     codebase_context = None
     try:
         logger.info("Getting codebase context...")
         codebase_retriever = get_codebase_retriever()
         codebase_context = codebase_retriever.get_context_for_diff(diff_text, top_k=5)
-    except (RuntimeError, ImportError) as e:
+    except Exception as e:
         logger.warning(f"Codebase context unavailable ({e}), continuing without it")
 
     # Build prompt manually to bypass PromptBuilder's 5000-char diff truncation.

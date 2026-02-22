@@ -45,6 +45,7 @@ if ! command -v cargo &>/dev/null; then
     echo "WARNING: Rust/cargo not found — codanna will not be available."
     echo "Install Rust to enable codebase analysis:"
     echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+    echo "Or download a binary from https://github.com/bartolli/codanna/releases"
     echo ""
     # Non-fatal: the review tool works without codanna, just without --codebase
     exit 0

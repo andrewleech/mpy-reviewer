@@ -5,6 +5,22 @@ from dataclasses import dataclass, field
 import os
 
 
+def _detect_micropython_repo() -> Path | None:
+    """Walk up from CWD looking for a MicroPython checkout.
+
+    Identifies a MicroPython repo by the presence of py/runtime.c,
+    which is unique to MicroPython checkouts.
+    """
+    try:
+        cwd = Path.cwd().resolve()
+    except OSError:
+        return None
+    for d in [cwd, *cwd.parents]:
+        if (d / "py" / "runtime.c").is_file():
+            return d
+    return None
+
+
 @dataclass
 class Config:
     """Configuration for the RAG system."""
@@ -40,7 +56,7 @@ class Config:
         if self.sqlite_db_path is None:
             self.sqlite_db_path = self.project_root / "data" / "reviews.db"
         if self.micropython_repo_path is None:
-            self.micropython_repo_path = Path("/home/corona/mpy/review")
+            self.micropython_repo_path = _detect_micropython_repo()
 
         # Auto-detect device
         if self.device is None:
