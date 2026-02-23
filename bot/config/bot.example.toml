@@ -1,3 +1,6 @@
+# Users trigger reviews by commenting "/review" (exact match) on a pull request.
+# The bot responds to issue_comment events with action "created".
+
 [github_app]
 app_id = 123456
 # Either inline or path to PEM file

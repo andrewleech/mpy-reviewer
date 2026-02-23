@@ -3,11 +3,15 @@
 import hashlib
 import hmac
 import logging
+import time
 import urllib.error
 
 from bot.github_api import github_request
 
 logger = logging.getLogger(__name__)
+
+_collab_cache: dict[str, tuple[bool, float]] = {}
+_COLLAB_CACHE_TTL = 300  # 5 minutes
 
 
 def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> bool:
@@ -58,6 +62,11 @@ def is_authorized(
     if allowlist and username in allowlist:
         return True
 
+    cache_key = f"{owner}/{repo}/{username}"
+    cached = _collab_cache.get(cache_key)
+    if cached and (time.monotonic() - cached[1]) < _COLLAB_CACHE_TTL:
+        return cached[0]
+
     # Check if the user is a repo collaborator (204 = yes, 404 = no)
     try:
         github_request(
@@ -65,16 +74,20 @@ def is_authorized(
             f"/repos/{owner}/{repo}/collaborators/{username}",
             token=token,
         )
-        return True
+        result = True
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            return False
-        if e.code == 403:
-            # Rate-limited or forbidden — fail closed as unauthorized.
+            result = False
+        elif e.code == 403:
+            # Rate-limited — fail closed, don't cache transient state.
             logger.warning("Rate limited checking collaborator status for %s", username)
+            return False
         else:
             logger.warning("Collaborator check failed for %s: HTTP %d", username, e.code)
-        return False
+            return False
     except urllib.error.URLError as e:
         logger.warning("Network error checking collaborator status for %s: %s", username, e)
         return False
+
+    _collab_cache[cache_key] = (result, time.monotonic())
+    return result
