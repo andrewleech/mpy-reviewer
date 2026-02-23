@@ -7,9 +7,9 @@ multiple times with different queries, drill into PR history, etc.
 
 import json
 import logging
+import os
 import subprocess
 import sys
-from typing import Optional
 
 from fastmcp import FastMCP
 
@@ -194,10 +194,10 @@ def review_pr(
 def search_reviews(
     query: str,
     top_k: int = 10,
-    domain: Optional[str] = None,
-    severity: Optional[str] = None,
-    component: Optional[str] = None,
-    language_context: Optional[str] = None,
+    domain: str | None = None,
+    severity: str | None = None,
+    component: str | None = None,
+    language_context: str | None = None,
 ) -> dict:
     """Search review comments by semantic similarity with optional filters.
 
@@ -320,4 +320,31 @@ def get_pr_review_history(
 
 
 if __name__ == "__main__":
-    mcp.run()
+    # Bot review-posting tools live in bot.mcp_tools. Registered only for
+    # the standalone deployment entry point. Plugin/library imports get the
+    # base mcp object without review-posting tools.
+    try:
+        from bot.mcp_tools import register_bot_tools
+        register_bot_tools(mcp)
+    except ImportError:
+        pass
+
+    import argparse
+
+    parser = argparse.ArgumentParser(description="MicroPython Review MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse", "streamable-http"],
+        default="stdio",
+        help="MCP transport protocol (default: stdio)",
+    )
+    parser.add_argument("--host", default="0.0.0.0", help="HTTP bind address")
+    parser.add_argument("--port", type=int, default=8080, help="HTTP port")
+    args = parser.parse_args()
+
+    kwargs = {}
+    if args.transport != "stdio":
+        kwargs["host"] = args.host
+        kwargs["port"] = args.port
+
+    mcp.run(transport=args.transport, **kwargs)
