@@ -1,5 +1,5 @@
 # Stage 1: Build codanna from Rust
-FROM rust:1.82-slim AS codanna-builder
+FROM rust:1.85-slim AS codanna-builder
 RUN cargo install codanna --all-features
 
 # Stage 2: Node.js (for Claude CLI)
