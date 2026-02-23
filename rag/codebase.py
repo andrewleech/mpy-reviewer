@@ -12,11 +12,17 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from .config import get_config
 
 logger = logging.getLogger(__name__)
+
+
+class CodannaSetupInProgress(RuntimeError):
+    """Raised when codanna install or index build is still running."""
+    pass
 
 
 class CodebaseRetriever:
@@ -26,20 +32,60 @@ class CodebaseRetriever:
         config = get_config()
         self.repo_path = repo_path or config.micropython_repo_path
         self._codanna_available = False
+        self._codanna_installing = False
         self._codanna_binary: Optional[str] = None
         self._codanna_warned = False
         self._file_cache: Dict[str, str] = {}
 
+        # Detect codanna binary / install lock regardless of repo_path.
+        # This ensures CodannaSetupInProgress is raised even when the
+        # working directory isn't a MicroPython checkout (e.g. application
+        # repos that use MicroPython as a submodule or not at all).
+        self._detect_codanna()
+
+        # If codanna is mid-install, poll the lock and raise early so
+        # callers get a clear "retry later" instead of silent degradation.
+        if self._codanna_installing:
+            self._wait_for_install()  # raises CodannaSetupInProgress
+
         if self.repo_path is None:
-            logger.warning(
+            logger.info(
                 "No MicroPython repo found (not inside a checkout and none configured). "
-                "Codebase context will be empty."
+                "Codebase context will be limited to codanna if available."
             )
             return
 
-        self._detect_codanna()
         if self._codanna_available:
-            self._ensure_index()
+            self._ensure_index()  # may raise CodannaSetupInProgress
+
+    # ------------------------------------------------------------------ #
+    # Lock-file helpers
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _is_lock_alive(lock_file: Path) -> bool:
+        """Check if a lock file exists and its owning process is still running."""
+        try:
+            pid = int(lock_file.read_text().strip())
+            os.kill(pid, 0)  # signal 0 = existence check
+            return True
+        except (FileNotFoundError, ValueError, ProcessLookupError, OSError):
+            return False
+
+    @staticmethod
+    def _poll_lock(lock_file: Path, timeout: float = 5.0, interval: float = 0.5) -> bool:
+        """Poll until lock clears or timeout. Returns True if lock cleared."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not CodebaseRetriever._is_lock_alive(lock_file):
+                # Clean up stale file if it still exists
+                try:
+                    lock_file.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                return True
+            time.sleep(interval)
+        return False
 
     # ------------------------------------------------------------------ #
     # codanna detection and index management
@@ -47,6 +93,8 @@ class CodebaseRetriever:
 
     def _detect_codanna(self) -> None:
         """Find the codanna binary. Sets _codanna_available and _codanna_binary."""
+        self._codanna_installing = False
+
         binary = shutil.which("codanna")
         if binary is None:
             cargo_path = Path.home() / ".cargo" / "bin" / "codanna"
@@ -54,6 +102,18 @@ class CodebaseRetriever:
                 binary = str(cargo_path)
 
         if binary is None:
+            # Check if an install is in progress
+            install_lock = Path.home() / ".codanna" / "install.lock"
+            if self._is_lock_alive(install_lock):
+                self._codanna_installing = True
+                logger.info("codanna install in progress (lock: %s)", install_lock)
+                return
+            # Stale lock — clean up
+            if install_lock.exists():
+                try:
+                    install_lock.unlink(missing_ok=True)
+                except OSError:
+                    pass
             self._warn_codanna_missing()
             return
 
@@ -82,12 +142,53 @@ class CodebaseRetriever:
             )
         logger.warning(msg)
 
+    def _wait_for_install(self) -> None:
+        """Poll the install lock and raise if codanna is still being installed.
+
+        On success, re-detects the binary so _codanna_available is set.
+        """
+        install_lock = Path.home() / ".codanna" / "install.lock"
+        if self._poll_lock(install_lock, timeout=5.0):
+            # Install finished — re-detect the binary
+            self._detect_codanna()
+        else:
+            raise CodannaSetupInProgress(
+                "codanna is being installed in the background. "
+                "Try again in ~30 seconds."
+            )
+
     def _ensure_index(self) -> None:
-        """Ensure the codanna index exists for repo_path; build if missing."""
+        """Ensure the codanna index exists for repo_path; build if missing.
+
+        Raises CodannaSetupInProgress if a background index build
+        is detected and doesn't complete within a short poll window.
+        """
+        # Phase 2: check/wait for index
         codanna_dir = self.repo_path / ".codanna"
+        building_lock = codanna_dir / ".building"
+
+        if building_lock.exists():
+            if self._is_lock_alive(building_lock):
+                # Active background build — poll briefly
+                if self._poll_lock(building_lock, timeout=5.0):
+                    return  # build finished
+                raise CodannaSetupInProgress(
+                    "codanna index is being built in the background. "
+                    "Try again in ~30 seconds."
+                )
+            else:
+                # Stale lock from a crashed process — remove and proceed
+                logger.info("Removing stale .building lock at %s", building_lock)
+                try:
+                    building_lock.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        # Index directory exists and no building lock — ready
         if codanna_dir.is_dir():
             return
 
+        # No index at all — build synchronously (direct CLI usage)
         logger.info("codanna index not found at %s — building...", codanna_dir)
 
         # init
@@ -104,7 +205,11 @@ class CodebaseRetriever:
             self._codanna_available = False
             return
 
-        # Add .codanna/ to .git/info/exclude so it doesn't pollute git status
+        self._add_codanna_to_git_exclude()
+        logger.info("codanna index built for %s", self.repo_path)
+
+    def _add_codanna_to_git_exclude(self) -> None:
+        """Add .codanna/ to .git/info/exclude if not already there."""
         git_exclude = self.repo_path / ".git" / "info" / "exclude"
         if git_exclude.is_file():
             try:
@@ -115,8 +220,6 @@ class CodebaseRetriever:
                         f.write(f"{suffix}.codanna/\n")
             except OSError:
                 pass
-
-        logger.info("codanna index built for %s", self.repo_path)
 
     def _run_codanna_raw(self, args: list, timeout: int = 30) -> bool:
         """Run an arbitrary codanna command. Returns True on success."""
