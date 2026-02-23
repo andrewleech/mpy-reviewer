@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: false
 
       - uses: actions/setup-python@v5
         with:
@@ -29,10 +31,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: false
 
       - name: Create stub reviews.db
         run: |
-          mkdir -p data
+          rm -f data/reviews.db
           python -c "
           import sqlite3
           conn = sqlite3.connect('data/reviews.db')
