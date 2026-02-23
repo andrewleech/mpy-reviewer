@@ -6,7 +6,17 @@ import urllib.error
 from io import BytesIO
 from unittest.mock import patch
 
-from bot.auth import verify_webhook_signature, is_authorized
+import pytest
+
+from bot.auth import verify_webhook_signature, is_authorized, _collab_cache
+
+
+@pytest.fixture(autouse=True)
+def _clear_collab_cache():
+    """Isolate collaborator cache between tests."""
+    _collab_cache.clear()
+    yield
+    _collab_cache.clear()
 
 
 def test_valid_signature():
@@ -75,3 +85,21 @@ def test_authorized_allowlist_none():
     """allowlist=None falls through to collaborator check."""
     with patch("bot.auth.github_request", return_value=None):
         assert is_authorized("bob", "o", "r", allowlist=None, token="tok") is True
+
+
+def test_collab_cache_avoids_repeat_api_call():
+    """Second call for same user hits cache, not the API."""
+    with patch("bot.auth.github_request", return_value=None) as mock_req:
+        assert is_authorized("alice", "o", "r", token="tok") is True
+        assert is_authorized("alice", "o", "r", token="tok") is True
+        mock_req.assert_called_once()
+
+
+def test_collab_cache_does_not_cache_rate_limit():
+    """403 rate-limit responses are not cached."""
+    err = urllib.error.HTTPError(
+        url="", code=403, msg="Forbidden", hdrs=None, fp=BytesIO(b""),
+    )
+    with patch("bot.auth.github_request", side_effect=err):
+        assert is_authorized("eve", "o", "r", token="tok") is False
+    assert "o/r/eve" not in _collab_cache
