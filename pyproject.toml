@@ -26,8 +26,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
+    "pytest-asyncio>=0.21",
     "pytest-cov",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [project.scripts]
 mpy-reviewer = "rag.cli:main"
