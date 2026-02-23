@@ -1,0 +1,77 @@
+# Deployment:
+#   1. Copy bot/config/bot.example.toml to bot/config/bot.toml and fill in secrets
+#   2. Place the GitHub App private key at bot/config/bot-private-key.pem
+#   3. Place Claude OAuth credentials in bot/config/claude-oauth/
+#   4. Run: docker compose -f bot/docker-compose.yml up -d
+#   5. Point GitHub webhook URL to https://<host>:${WEBHOOK_PORT:-8080}/webhook
+
+services:
+  mcp-server:
+    build:
+      context: ..
+      dockerfile: bot/Dockerfile
+    command: ["python", "mcp_server.py", "--transport", "streamable-http", "--port", "9090"]
+    volumes:
+      - mpy-checkout:/workspace/micropython
+      - token-share:/var/run/token
+    environment:
+      - GITHUB_TOKEN_FILE=/var/run/token/github_token
+      - MPY_CHECKOUT=/workspace/micropython
+      - MPY_REVIEWER_BOT_MODE=1
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:9090/mcp')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks: [bot-internal]
+    restart: unless-stopped
+
+  webhook:
+    build:
+      context: ..
+      dockerfile: bot/Dockerfile
+    command: ["python", "-m", "bot.webhook_service"]
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # Isolate /proc — system prompt appears in CLI args
+    pid: private
+    ports:
+      - "${WEBHOOK_PORT:-8080}:8080"
+    volumes:
+      - ./config/bot.toml:/config/bot.toml:ro
+      - ./config/bot-private-key.pem:/config/bot-private-key.pem:ro
+      - ./config/claude-oauth/:/config/claude-oauth/:ro
+      - mpy-checkout:/workspace/micropython
+      - token-share:/var/run/token
+    environment:
+      - BOT_CONFIG_PATH=/config/bot.toml
+      - GITHUB_TOKEN_FILE=/var/run/token/github_token
+      - MPY_CHECKOUT=/workspace/micropython
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    networks: [bot-internal]
+    restart: unless-stopped
+
+networks:
+  bot-internal:
+    # MCP server port 9090 is only accessible within this network.
+    # It is NOT published externally. The webhook service is the only
+    # client. Do not add 'ports:' to the mcp-server service.
+    #
+    # Design decision: no application-level auth on MCP endpoint.
+    # Docker network isolation is the sole access control mechanism.
+
+volumes:
+  mpy-checkout:
+  token-share:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs

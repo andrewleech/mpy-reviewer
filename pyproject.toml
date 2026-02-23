@@ -24,6 +24,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+bot = [
+    "PyJWT>=2.0",
+    "cryptography",
+    "starlette>=0.27",
+    "uvicorn>=0.20",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21",
@@ -32,13 +38,14 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests", "bot/tests"]
 
 [project.scripts]
 mpy-reviewer = "rag.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["rag*"]
+include = ["rag*", "bot*"]
 
 [tool.uv]
 index-url = "https://pypi.org/simple"
