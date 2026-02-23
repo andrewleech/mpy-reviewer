@@ -4,6 +4,21 @@ set -e
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-.}"
 
+# --- Git LFS: fetch actual data files (reviews.db) ---
+
+DB_FILE="$PLUGIN_ROOT/data/reviews.db"
+if [ -f "$DB_FILE" ] && head -1 "$DB_FILE" 2>/dev/null | grep -q "^version https://git-lfs"; then
+    if command -v git-lfs &>/dev/null || git lfs version &>/dev/null 2>&1; then
+        echo "Fetching LFS data files..."
+        git -C "$PLUGIN_ROOT" lfs pull
+    else
+        echo ""
+        echo "WARNING: git-lfs not installed — reviews.db is a stub pointer."
+        echo "Install git-lfs and run: git -C $PLUGIN_ROOT lfs pull"
+        echo ""
+    fi
+fi
+
 # --- Python venv and package ---
 
 VENV_DIR="$PLUGIN_ROOT/venv"

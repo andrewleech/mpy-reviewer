@@ -23,6 +23,9 @@ _ALLOWED_FILTER_KEYS = frozenset({
 # Pattern for safe filter values: alphanumeric, underscores, hyphens.
 _SAFE_VALUE_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
+# Severity ordering: most critical first.
+_SEVERITY_ORDER = {"blocking": 0, "suggestion": 1, "nitpick": 2}
+
 # FTS5 special characters that need quoting.
 _FTS5_SPECIAL = re.compile(r'["\(\)\*:]')
 
@@ -281,7 +284,17 @@ class ReviewRetriever:
                 if r.get("is_style_example") == is_style_example
             ]
 
-        return results[:top_k]
+        results = results[:top_k]
+
+        # Sort by severity (blocking first), then by relevance within each group
+        results.sort(
+            key=lambda x: (
+                _SEVERITY_ORDER.get(x.get("severity", ""), 9),
+                -x.get("rrf_score", 0),
+            )
+        )
+
+        return results
 
     def get_similar_reviews(
         self,
@@ -345,6 +358,14 @@ class ReviewRetriever:
             diverse_results = expand_results_with_threads(diverse_results)
         except Exception as e:
             logger.debug(f"Thread expansion skipped: {e}")
+
+        # Sort by severity (blocking first), then by relevance within each group
+        diverse_results.sort(
+            key=lambda x: (
+                _SEVERITY_ORDER.get(x.get("severity", ""), 9),
+                -x.get("rrf_score", 0),
+            )
+        )
 
         return diverse_results
 
