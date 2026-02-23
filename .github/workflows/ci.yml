@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[bot,dev]"
+
+      - name: Run tests
+        run: pytest --tb=short -q
+
+  docker-build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create stub reviews.db
+        run: |
+          mkdir -p data
+          python -c "
+          import sqlite3
+          conn = sqlite3.connect('data/reviews.db')
+          conn.execute('CREATE TABLE IF NOT EXISTS prs (id INTEGER PRIMARY KEY)')
+          conn.close()
+          "
+
+      - name: Build Docker image
+        run: docker build -f bot/Dockerfile .
