@@ -19,10 +19,12 @@ services:
     volumes:
       - mpy-checkout:/workspace/micropython
       - token-share:/var/run/token
+      - hf-cache:/home/botuser/.cache/huggingface
     environment:
       - GITHUB_TOKEN_FILE=/var/run/token/github_token
       - MPY_CHECKOUT=/workspace/micropython
       - MPY_REVIEWER_BOT_MODE=1
+      - BOT_TARGET_REPO=${BOT_TARGET_REPO:-micropython/micropython}
     healthcheck:
       test: ["CMD", "python", "-c",
              "import socket; s=socket.create_connection(('localhost',9090),2); s.close()"]
@@ -77,6 +79,7 @@ networks:
 
 volumes:
   mpy-checkout:
+  hf-cache:
   token-share:
     driver_opts:
       type: tmpfs

@@ -49,8 +49,8 @@ COPY bot/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Prepare volume mount points with correct ownership
-RUN mkdir -p /workspace/micropython /config /var/run/token && \
-    chown botuser:botuser /workspace/micropython /config /var/run/token
+RUN mkdir -p /workspace/micropython /config /var/run/token /home/botuser/.cache/huggingface && \
+    chown botuser:botuser /workspace/micropython /config /var/run/token /home/botuser/.cache/huggingface
 
 VOLUME ["/workspace/micropython", "/config"]
 ENV GITHUB_TOKEN_FILE=/var/run/token/github_token
