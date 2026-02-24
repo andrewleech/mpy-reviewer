@@ -168,17 +168,21 @@ async def run_review(
             timeout=config.review.timeout_seconds,
         )
 
+        stderr_text = stderr.decode(errors="replace")
         if proc.returncode != 0:
             logger.error(
                 "claude -p failed for PR #%d (rc=%d): %s",
-                request.pr_number, proc.returncode, stderr.decode()[:1000],
+                request.pr_number, proc.returncode, stderr_text[:2000],
             )
             return False
 
         logger.info(
-            "claude -p completed for PR #%d (rc=%d, stdout=%d bytes)",
-            request.pr_number, proc.returncode, len(stdout),
+            "claude -p completed for PR #%d (rc=%d, stdout=%d bytes, stderr=%d bytes)",
+            request.pr_number, proc.returncode, len(stdout), len(stderr),
         )
+        if stderr_text.strip():
+            logger.info("claude -p stderr for PR #%d:\n%s",
+                        request.pr_number, stderr_text[:3000])
         return True
 
     except asyncio.TimeoutError:

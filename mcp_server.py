@@ -10,6 +10,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 
 from fastmcp import FastMCP
 
@@ -100,14 +101,22 @@ def review_diff(
         Markdown orchestration prompt (~5-8K chars) with a summary table
         of temp files, the style guide, and workflow instructions.
     """
+    t0 = time.monotonic()
+    logger.info("review_diff: starting (top_k=%d, include_codebase=%s, diff_len=%d)",
+                top_k, include_codebase, len(diff_text))
+
     retriever = _get_retriever()
     builder = _get_builder()
+    logger.info("review_diff: retriever/builder ready (%.1fs)", time.monotonic() - t0)
 
     files_changed = _extract_files_from_diff(diff_text)
+    logger.info("review_diff: %d files in diff (%.1fs)", len(files_changed), time.monotonic() - t0)
 
     results = retriever.get_similar_reviews(
         diff_text, top_k=top_k, diff_files=files_changed,
     )
+    logger.info("review_diff: retrieval returned %d results (%.1fs)",
+                len(results), time.monotonic() - t0)
 
     codebase_context = None
     if include_codebase:
@@ -116,10 +125,14 @@ def review_diff(
             codebase_context = get_codebase_retriever().get_context_for_diff(
                 diff_text, top_k=5,
             )
+            logger.info("review_diff: codebase context loaded (%.1fs)", time.monotonic() - t0)
         except Exception as e:
-            logger.warning(f"Codebase context failed: {e}")
+            logger.warning(f"review_diff: codebase context failed (%.1fs): {e}",
+                           time.monotonic() - t0)
 
     _temp_dir, file_infos = builder.write_example_files(results)
+    logger.info("review_diff: wrote %d example files (%.1fs)",
+                len(file_infos), time.monotonic() - t0)
 
     prompt = builder.build_orchestration_prompt(
         file_infos=file_infos,
@@ -127,6 +140,7 @@ def review_diff(
         codebase_context=codebase_context,
     )
 
+    logger.info("review_diff: complete (%.1fs)", time.monotonic() - t0)
     return prompt
 
 
@@ -149,26 +163,38 @@ def review_pr(
     Returns:
         Markdown orchestration prompt with file paths and style guide.
     """
+    t0 = time.monotonic()
+    logger.info("review_pr: starting PR #%d (top_k=%d, include_codebase=%s)",
+                pr_number, top_k, include_codebase)
+
     result = subprocess.run(
         ["gh", "pr", "diff", str(pr_number), "--repo", "micropython/micropython"],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
+        logger.error("review_pr: gh pr diff failed: %s", result.stderr.strip())
         return json.dumps({"error": f"Failed to fetch PR diff: {result.stderr.strip()}"})
 
     diff_text = result.stdout
     if not diff_text.strip():
         return json.dumps({"error": f"PR #{pr_number} has an empty diff"})
 
+    logger.info("review_pr: fetched diff (%d chars, %.1fs)",
+                len(diff_text), time.monotonic() - t0)
+
     retriever = _get_retriever()
     builder = _get_builder()
+    logger.info("review_pr: retriever/builder ready (%.1fs)", time.monotonic() - t0)
 
     files_changed = _extract_files_from_diff(diff_text)
+    logger.info("review_pr: %d files in diff (%.1fs)", len(files_changed), time.monotonic() - t0)
 
     results = retriever.get_similar_reviews(
         diff_text, top_k=top_k, diff_files=files_changed,
     )
+    logger.info("review_pr: retrieval returned %d results (%.1fs)",
+                len(results), time.monotonic() - t0)
 
     codebase_context = None
     if include_codebase:
@@ -177,17 +203,24 @@ def review_pr(
             codebase_context = get_codebase_retriever().get_context_for_diff(
                 diff_text, top_k=5,
             )
+            logger.info("review_pr: codebase context loaded (%.1fs)", time.monotonic() - t0)
         except Exception as e:
-            logger.warning(f"Codebase context failed: {e}")
+            logger.warning("review_pr: codebase context failed (%.1fs): %s",
+                           time.monotonic() - t0, e)
 
     _temp_dir, file_infos = builder.write_example_files(results)
+    logger.info("review_pr: wrote %d example files (%.1fs)",
+                len(file_infos), time.monotonic() - t0)
 
-    return builder.build_orchestration_prompt(
+    prompt = builder.build_orchestration_prompt(
         file_infos=file_infos,
         files_changed=files_changed,
         pr_number=pr_number,
         codebase_context=codebase_context,
     )
+
+    logger.info("review_pr: complete (%.1fs)", time.monotonic() - t0)
+    return prompt
 
 
 @mcp.tool()

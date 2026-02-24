@@ -71,6 +71,16 @@ class CodeEmbedder:
         Returns:
             Embedding vector as numpy array (768 dimensions).
         """
+        # Truncate to ~max_seq_length tokens worth of characters.
+        # SentenceTransformer tokenizes the full input before truncating,
+        # so very long texts (e.g. full diffs) cause O(n) slowdowns on CPU
+        # with no quality benefit beyond the model's token window.
+        # Rough heuristic: 1 token ≈ 3 chars for code.
+        char_limit = self.max_seq_length * 3
+        if len(text) > char_limit:
+            logger.info("Truncating embed input from %d to %d chars", len(text), char_limit)
+            text = text[:char_limit]
+
         return self.embed_batch([text], is_query=is_query)[0]
 
     def embed_batch(
