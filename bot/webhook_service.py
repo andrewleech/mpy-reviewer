@@ -1,7 +1,8 @@
-"""GitHub webhook receiver for /review trigger commands.
+"""GitHub webhook receiver for review triggers.
 
-Runs as a Starlette ASGI app. Receives issue_comment events from GitHub,
-validates signatures, authorizes users, and enqueues review requests.
+Runs as a Starlette ASGI app. Receives issue_comment (/review command) and
+pull_request (review_requested) events from GitHub, validates signatures,
+authorizes users, and enqueues review requests.
 """
 
 import asyncio
@@ -17,7 +18,7 @@ from starlette.routing import Route
 from bot.auth import verify_webhook_signature, is_authorized
 from bot.config import get_bot_config, BotConfig
 from bot.github_api import github_request
-from bot.github_app import GitHubAppAuth
+from bot.github_app import GitHubAppAuth, fetch_app_slug
 from bot.review_queue import ReviewQueue, ReviewRequest
 
 logger = logging.getLogger(__name__)
@@ -59,14 +60,28 @@ async def webhook_handler(request: Request) -> Response:
         return JSONResponse({"error": "invalid signature"}, status_code=401)
 
     event_type = request.headers.get("X-GitHub-Event", "")
-    if event_type != "issue_comment":
-        return JSONResponse({"status": "ok"})
 
     try:
         payload = json.loads(body)
     except (json.JSONDecodeError, ValueError):
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
 
+    if event_type == "issue_comment":
+        return await _handle_issue_comment(request, payload, config, auth, queue)
+    elif event_type == "pull_request":
+        return await _handle_pull_request(request, payload, config, auth, queue)
+    else:
+        return JSONResponse({"status": "ok"})
+
+
+async def _handle_issue_comment(
+    request: Request,
+    payload: dict,
+    config: BotConfig,
+    auth: GitHubAppAuth | None,
+    queue: ReviewQueue,
+) -> Response:
+    """Handle issue_comment events — /review command trigger."""
     # Only handle new comments
     if payload.get("action") != "created":
         return JSONResponse({"status": "ok"})
@@ -153,6 +168,76 @@ async def webhook_handler(request: Request) -> Response:
     })
 
 
+async def _handle_pull_request(
+    request: Request,
+    payload: dict,
+    config: BotConfig,
+    auth: GitHubAppAuth | None,
+    queue: ReviewQueue,
+) -> Response:
+    """Handle pull_request events — review_requested trigger."""
+    if payload.get("action") != "review_requested":
+        return JSONResponse({"status": "ok"})
+
+    # Only respond to user review requests, not team requests
+    requested_reviewer = payload.get("requested_reviewer")
+    if not requested_reviewer:
+        return JSONResponse({"status": "ok"})
+
+    bot_username = getattr(request.app.state, "bot_username", None)
+    if not bot_username:
+        logger.warning("bot_username not set, cannot handle review_requested")
+        return JSONResponse({"status": "ignored", "reason": "bot_username unknown"})
+
+    reviewer_login = requested_reviewer.get("login", "")
+    if reviewer_login.lower() != bot_username.lower():
+        return JSONResponse({"status": "ok"})
+
+    repo_full = payload.get("repository", {}).get("full_name", "")
+    if not repo_full or "/" not in repo_full:
+        logger.warning("Missing or malformed repository.full_name: %r", repo_full)
+        return JSONResponse({"status": "ignored", "reason": "invalid repo"})
+
+    if repo_full != config.target.repo:
+        logger.warning("Webhook for non-target repo %s (target: %s)", repo_full, config.target.repo)
+        return JSONResponse({"status": "ignored", "reason": "wrong repo"})
+
+    repo_owner, repo_name = repo_full.split("/", 1)
+
+    pr = payload.get("pull_request", {})
+    pr_number = pr.get("number", 0)
+    if not pr_number:
+        logger.warning("Missing PR number in pull_request webhook payload")
+        return JSONResponse({"status": "ignored", "reason": "missing pr_number"})
+
+    head_sha = pr.get("head", {}).get("sha", "")
+    requester = payload.get("sender", {}).get("login", "unknown")
+
+    # No authorization check needed — GitHub only allows collaborators
+    # to request reviews, so the sender is implicitly authorized.
+
+    logger.info(
+        "Review requested by %s on PR #%d via GitHub UI",
+        requester, pr_number,
+    )
+
+    review_request = ReviewRequest(
+        pr_number=pr_number,
+        comment_id=0,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        requester=requester,
+        head_sha=head_sha,
+    )
+
+    await queue.enqueue(review_request)
+
+    return JSONResponse({
+        "status": "queued",
+        "pr_number": pr_number,
+    })
+
+
 async def health_handler(request: Request) -> Response:
     """Health check endpoint."""
     return JSONResponse({"status": "ok"})
@@ -185,6 +270,19 @@ def create_app(config: BotConfig | None = None) -> Starlette:
         # Force initial token refresh
         auth.get_token()
 
+        # Detect bot username from app slug for review_requested matching
+        try:
+            slug = await asyncio.to_thread(
+                fetch_app_slug,
+                config.github_app.app_id,
+                config.github_app.get_private_key_pem(),
+            )
+            app.state.bot_username = f"{slug}[bot]"
+            logger.info("Bot username: %s", app.state.bot_username)
+        except Exception as e:
+            logger.error("Failed to detect bot username: %s", e)
+            app.state.bot_username = None
+
         # Per-app failure counter — no cross-app leakage, no test isolation fixture needed.
         failure_counts: OrderedDict[str, int] = OrderedDict()
 
@@ -193,6 +291,8 @@ def create_app(config: BotConfig | None = None) -> Starlette:
 
         async def _on_success(req: ReviewRequest) -> None:
             failure_counts.pop(f"pr-{req.pr_number}", None)
+            if not req.comment_id:
+                return  # No comment to react to (e.g. review_requested trigger)
             try:
                 token = auth.get_token()
                 await asyncio.to_thread(
@@ -213,15 +313,16 @@ def create_app(config: BotConfig | None = None) -> Starlette:
                 logger.error("Token refresh failed in failure handler: %s", e)
                 return  # Can't post reactions/comments without a token
 
-            try:
-                await asyncio.to_thread(
-                    github_request, "POST",
-                    f"/repos/{req.repo_owner}/{req.repo_name}"
-                    f"/issues/comments/{req.comment_id}/reactions",
-                    {"content": "confused"}, token=token,
-                )
-            except Exception as e:
-                logger.warning("Failed to add failure reaction: %s", e)
+            if req.comment_id:
+                try:
+                    await asyncio.to_thread(
+                        github_request, "POST",
+                        f"/repos/{req.repo_owner}/{req.repo_name}"
+                        f"/issues/comments/{req.comment_id}/reactions",
+                        {"content": "confused"}, token=token,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to add failure reaction: %s", e)
 
             # Safety: no await between read, increment, and write. The single-threaded
             # asyncio event loop guarantees no interleaving. Do NOT add any await

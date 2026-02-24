@@ -74,6 +74,40 @@ def get_installation_token(
     return token, expires_at
 
 
+def fetch_app_slug(app_id: int, private_key_pem: str) -> str:
+    """Fetch the GitHub App slug via GET /app using JWT auth.
+
+    Args:
+        app_id: GitHub App ID.
+        private_key_pem: RSA private key in PEM format.
+
+    Returns:
+        The app slug (e.g. "my-review-bot").
+    """
+    jwt_token = generate_jwt(app_id, private_key_pem)
+    url = "https://api.github.com/app"
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("Authorization", f"Bearer {jwt_token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode()[:200] if e.fp else ""
+        raise RuntimeError(
+            f"Failed to fetch app info (HTTP {e.code}): {error_body}"
+        ) from e
+    except (urllib.error.URLError, OSError) as e:
+        raise RuntimeError(f"Failed to connect to GitHub API: {e}") from e
+
+    slug = data.get("slug", "")
+    if not slug:
+        raise RuntimeError("GitHub App response missing 'slug' field")
+    return slug
+
+
 class GitHubAppAuth:
     """Manages GitHub App installation token with auto-refresh.
 
