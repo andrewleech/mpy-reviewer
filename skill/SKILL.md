@@ -1,0 +1,372 @@
+---
+name: mpy-review
+description: Use this skill when the user wants to review MicroPython code changes using dpgeorge's review patterns. Invoke when user mentions reviewing code, finding review examples, or wants feedback on MicroPython PRs/commits/diffs in dpgeorge's style. Provides semantic search across 18,614 categorized review comments.
+---
+
+# MicroPython Review Assistant Skill
+
+## Purpose
+
+This skill provides AI-assisted code review for MicroPython using Damien George's (dpgeorge) historical review patterns. It searches a database of 18,614 categorized review comments to find relevant examples and generate review context.
+
+## When to Use This Skill
+
+Invoke this skill when the user:
+- Wants to review code changes (branches, commits, diffs, PRs)
+- Asks for dpgeorge-style feedback on their code
+- Wants to find examples of specific review patterns
+- Needs review context for MicroPython code
+- Mentions reviewing, feedback, or code quality for MicroPython
+
+**Important:** Users cannot invoke skills directly. They must ask you to use the skill:
+- ✅ User: "Can you review my current branch?"
+- ✅ User: "Can you /mpy-review the current branch?"
+- ❌ User: "/mpy-review the current branch" (this will fail)
+
+When the user asks for review help, invoke this skill proactively.
+
+## Requirements
+
+This skill requires **codanna** for semantic code search and codebase analysis.
+
+**Automatic setup:** A SessionStart hook (`.claude/hooks/ensure-codanna.sh`) automatically installs codanna via cargo on first use.
+
+**Manual installation:**
+```bash
+cargo install codanna --all-features
+```
+
+If codanna is not installed, the tool will fail with a prominent error message directing the user to install it.
+
+See `docs/CLAUDE_SETUP.md` for detailed setup instructions.
+
+## Tool Location
+
+The underlying CLI tool is located at:
+```
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag
+```
+
+Always use this full path when invoking the tool. Do not rely on PATH.
+
+## Understanding User Intent
+
+Parse natural language requests and map to appropriate tool commands:
+
+### Review Current Changes
+**User says:** "review my current changes", "review this branch", "review what I've done"
+
+**What to do:**
+1. Generate diff: `git diff main` (or appropriate base branch)
+2. Pipe to tool: `git diff main | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --codebase --output prompt`
+3. Present the review prompt to help the user
+
+**Example:**
+```bash
+git diff main | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --codebase --output prompt
+```
+
+### Review Specific Commit
+**User says:** "review commit abc123", "check commit abc123"
+
+**What to do:**
+1. Get commit diff: `git show abc123`
+2. Pipe to tool: `git show abc123 | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --output prompt`
+
+**Example:**
+```bash
+git show ca65d543 | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --codebase --output prompt
+```
+
+### Review Uncommitted Changes
+**User says:** "review my uncommitted changes", "review staged changes"
+
+**What to do:**
+```bash
+# All uncommitted changes (staged + unstaged)
+git diff HEAD | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --output prompt
+
+# Only staged changes
+git diff --cached | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --output prompt
+```
+
+### Review GitHub PR
+**User says:** "review PR 12345", "check pull request 12345"
+
+**What to do:**
+```bash
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --pr 12345 --codebase --output prompt
+```
+
+### Review Specific Files
+**User says:** "review my changes to py/gc.c", "review changes in extmod/"
+
+**What to do:**
+```bash
+git diff main -- py/gc.c | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --output prompt
+
+git diff main -- extmod/ | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --codebase --output prompt
+```
+
+### Find Review Examples
+**User says:** "find examples of memory allocation reviews", "show me dpgeorge's feedback on error handling"
+
+**What to do:**
+```bash
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag search "memory allocation" --domain memory -k 10
+
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag search "error handling" --domain correctness -k 10
+```
+
+### Get Quick Context (No Full Prompt)
+**User says:** "show me similar reviews", "what has dpgeorge said about this before"
+
+**What to do:**
+Use `--output context` instead of `--output prompt` to get just the examples without full prompt structure:
+```bash
+git diff main | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --output context
+```
+
+## Tool Commands Reference
+
+### Review Command
+```bash
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review [OPTIONS]
+```
+
+**Input Options (choose one):**
+- `--diff FILE` - Review a diff file
+- `--pr NUMBER` - Review a GitHub PR (uses gh CLI)
+- `--stdin` - Read diff from stdin (recommended for git integration)
+
+**Quality Options:**
+- `--codebase` - Include MicroPython codebase context (definitions, patterns) [RECOMMENDED]
+- `--rerank` - Use cross-encoder re-ranking for better relevance (slower, 5-10s on CPU)
+- `-k N` - Number of review examples (default: 8)
+
+**Output Options:**
+- `--output context` - Just the review examples (default, quick to read)
+- `--output prompt` - Full prompt ready for AI review (recommended for comprehensive review)
+- `--output json` - Structured JSON output
+
+### Search Command
+```bash
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag search "query" [OPTIONS]
+```
+
+**Options:**
+- `-k N` - Number of results (default: 10)
+- `--domain DOMAIN` - Filter by domain (see categories below)
+- `--severity SEVERITY` - Filter by severity (blocking, suggestion, nitpick)
+- `--component COMPONENT` - Filter by component (py_core, extmod, port_specific, etc.)
+- `--style-only` - Only show comments that exemplify dpgeorge's style
+- `--json` - JSON output
+
+### Stats Command
+```bash
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag stats
+```
+
+Shows index status and record count. Use this to verify the system is working.
+
+## Categories for Filtering
+
+### Domains (use with --domain)
+- `correctness` - Logic bugs, edge cases, error handling
+- `code_style` - Formatting, naming conventions
+- `api_design` - Public interfaces, function design
+- `memory` - Memory management, leaks, allocation
+- `performance` - Speed, efficiency optimizations
+- `portability` - Cross-platform compatibility
+- `documentation` - Comments, docs, clarity
+- `testing` - Test coverage, quality
+- `security` - Security vulnerabilities
+- `architecture` - Design patterns, structure
+- `build_system` - Makefiles, build configuration
+- `error_handling` - Error paths, recovery
+
+### Severities (use with --severity)
+- `blocking` - Must fix before merge
+- `suggestion` - Recommended improvement
+- `nitpick` - Minor style/preference
+
+### Components (use with --component)
+- `py_core` - Core Python runtime (py/)
+- `extmod` - Extended modules (extmod/)
+- `port_specific` - Port implementations (ports/)
+- `drivers` - Hardware drivers
+- `tools` - Build/dev tools
+- `tests` - Test suite
+- `docs` - Documentation
+- `build_system` - Build configuration
+
+## Output Interpretation
+
+### Context Output (--output context)
+Returns formatted markdown with:
+- Review examples with diff context
+- dpgeorge's comments
+- Domain and severity tags
+
+Present this directly to the user to show relevant past reviews.
+
+### Prompt Output (--output prompt)
+Returns a complete prompt containing:
+- dpgeorge's review style guide
+- 5-10 relevant review examples with code context
+- The code to review
+- Task instructions for AI review
+
+**How to use:** After generating this prompt, you should:
+1. Present it to the user, OR
+2. Use it internally to generate a dpgeorge-style review yourself
+
+### JSON Output (--output json)
+Returns structured data. Parse and present relevant fields to user.
+
+## Workflow Examples
+
+### Example 1: User Wants General Review
+
+**User:** "Can you review my current changes?"
+
+**Your response:**
+1. Run: `git diff main | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --codebase --output prompt`
+2. Read the generated prompt
+3. Use the prompt to provide dpgeorge-style review feedback to the user
+
+### Example 2: User Wants Quick Examples
+
+**User:** "What has dpgeorge said about similar code before?"
+
+**Your response:**
+1. Run: `git diff main | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --output context`
+2. Present the review examples to the user directly
+3. Summarize common themes
+
+### Example 3: User Asks About Specific Pattern
+
+**User:** "Find me examples of dpgeorge's feedback on GPIO configuration"
+
+**Your response:**
+1. Run: `/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag search "GPIO configuration" --component port_specific -k 15`
+2. Present the search results
+3. Summarize key patterns
+
+### Example 4: User Mentions Specific Commit
+
+**User:** "Review commit ca65d543"
+
+**Your response:**
+1. Run: `git show ca65d543 | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --codebase --output prompt`
+2. Use the prompt to provide review feedback
+3. Highlight key issues found from similar past reviews
+
+### Example 5: User Asks to Review Specific File
+
+**User:** "Can you review my changes to py/gc.c?"
+
+**Your response:**
+1. Run: `git diff main -- py/gc.c | /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag review --stdin --codebase --output prompt`
+2. Provide targeted review focusing on that file
+3. Reference relevant dpgeorge patterns for GC code
+
+## Decision Guide: When to Use Which Options
+
+### Use `--codebase`
+**When:** User wants comprehensive review, mentions API usage, function calls, or needs context
+**Why:** Includes MicroPython codebase definitions and patterns
+**Cost:** +2-3 seconds
+
+### Use `--rerank`
+**When:** User emphasizes quality/accuracy, or initial results seem off-topic
+**Why:** Better relevance via cross-encoder scoring
+**Cost:** +5-10 seconds on CPU
+
+### Use `--output prompt`
+**When:** User wants detailed review, mentions "thorough", or you'll provide review feedback
+**Why:** Gives you complete context to generate dpgeorge-style review
+**Cost:** Longer output to process
+
+### Use `--output context`
+**When:** User asks for examples, "what has dpgeorge said", or wants quick reference
+**Why:** Just the examples, faster to read
+**Cost:** Minimal
+
+### Use `search` instead of `review`
+**When:** User asks about patterns/topics without providing specific code to review
+**Example:** "What does dpgeorge think about error handling?"
+**Why:** Semantic search, not diff-based retrieval
+
+## Handling Errors
+
+### "Index not found"
+The vector index hasn't been built. Inform user:
+```
+The review database index needs to be built first. Run:
+cd /home/anl/mpy/dpgeorge-review-db
+source venv/bin/activate
+python scripts/build_index_resume.py
+```
+
+### "Command not found"
+The tool path is incorrect. Verify with:
+```bash
+ls -l /home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag
+```
+
+### Git errors (no repository, invalid ref, etc.)
+Handle appropriately - ask user to clarify or check their git state.
+
+## Performance Expectations
+
+- **First query:** 2-3 seconds (model loading)
+- **Subsequent queries:** 0.5-1 second (dense search only)
+- **With --rerank:** +5-10 seconds on CPU
+- **With --codebase:** +2-3 seconds
+
+Inform user if a long operation is running.
+
+## Data Scope
+
+The database contains:
+- **18,614 categorized review comments**
+- **Source:** micropython/micropython repository
+- **Author:** Damien George (dpgeorge)
+- **Timeframe:** 2013-2025
+- **Coverage:** All PR review comments, issue comments, and review verdicts
+
+## Natural Language Understanding
+
+Be flexible with user requests. Map to appropriate commands:
+
+| User Intent | Tool Command |
+|-------------|--------------|
+| "review this" | `git diff \| ... review --stdin` |
+| "review commit X" | `git show X \| ... review --stdin` |
+| "review PR 123" | `... review --pr 123` |
+| "find GPIO reviews" | `... search "GPIO" --component port_specific` |
+| "show me memory issues" | `... search "memory" --domain memory --severity blocking` |
+| "examples of his style" | `... search "..." --style-only` |
+
+Always interpret user intent conversationally, then invoke the appropriate tool command.
+
+## Important Notes
+
+1. **Always use full path:** `/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag`
+2. **Prefer stdin for git integration:** Use `git diff \| ... --stdin` over temp files
+3. **Default to quality:** Use `--codebase --output prompt` unless user wants quick results
+4. **Be conversational:** Don't just relay CLI output, interpret and present meaningfully
+5. **Handle context:** If reviewing specific commits/branches, mention what's being reviewed
+6. **Cite examples:** When referencing dpgeorge patterns, show the actual comments from search results
+
+## Verification
+
+To test the skill is working:
+```bash
+/home/anl/mpy/dpgeorge-review-db/venv/bin/mpy-review-rag stats
+```
+
+Should show:
+- Index exists: True
+- Number of records: 18,614
