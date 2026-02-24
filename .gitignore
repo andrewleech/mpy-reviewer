@@ -23,10 +23,6 @@ logs/
 # Generated output
 output/
 
-# Eval benchmark (generated data excluded via eval/benchmark/.gitignore)
-# Source files are tracked.
-tests/
-
 # Editor
 *.swp
 *.swo

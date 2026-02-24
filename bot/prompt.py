@@ -4,6 +4,10 @@ Uses the data-driven STYLE_GUIDE from rag.prompt_builder rather than
 duplicating it. Adds security hardening for untrusted PR content.
 """
 
+import re
+
+_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
 
 def build_system_prompt(
     additional_system_prompt: str = "",
@@ -88,16 +92,11 @@ def build_system_prompt(
         "\n"
         "### Inline comment line numbers\n"
         "\n"
-        "The `line` parameter in `add_review_comment` MUST be a line number that "
-        "appears inside a diff hunk. Use the new-file line number (from the `+` "
-        "side / `RIGHT`) for added or modified lines, or the old-file line number "
-        "(from the `-` side / `LEFT`) for deleted lines. The GitHub API rejects "
-        "lines outside diff hunks with 422.\n"
-        "\n"
-        "To find the correct line number, read it directly from the diff hunk "
-        "header (`@@ -old_start,old_count +new_start,new_count @@`) and count "
-        "from there. Do NOT use line numbers from Read tool output — those are "
-        "source-file line numbers which may differ from the diff context.\n"
+        "Each diff line is prefixed with `L{n}` (old-file) and/or `R{n}` "
+        "(new-file) line numbers. Use these directly for `add_review_comment`:\n"
+        "- Added lines (`+`): use the `R` number with `side=\"RIGHT\"`\n"
+        "- Removed lines (`-`): use the `L` number with `side=\"LEFT\"`\n"
+        "- Context lines (` `): use the `R` number with `side=\"RIGHT\"`\n"
         "\n"
         "### Suggested fixes\n"
         "\n"
@@ -180,6 +179,52 @@ def _build_security_section() -> str:
     )
 
 
+def annotate_diff(diff: str) -> str:
+    """Prefix each diff line with old-file (L) and new-file (R) line numbers.
+
+    Hunk headers, file headers, and '\\ No newline' lines pass through unchanged.
+    Context lines get both L and R numbers; removed lines get L only; added lines
+    get R only. Each column is 5 chars wide for alignment up to 99999.
+    """
+    if not diff:
+        return diff
+
+    out: list[str] = []
+    left = right = 0
+
+    for line in diff.split("\n"):
+        if line.startswith("diff --git") or line.startswith("---") or line.startswith("+++"):
+            out.append(line)
+            continue
+
+        m = _HUNK_RE.match(line)
+        if m:
+            left = int(m.group(1))
+            right = int(m.group(2))
+            out.append(line)
+            continue
+
+        if line.startswith("\\ "):
+            out.append(line)
+            continue
+
+        if line.startswith("-"):
+            out.append(f"L{left:<5}     {line}")
+            left += 1
+        elif line.startswith("+"):
+            out.append(f"      R{right:<4}{line}")
+            right += 1
+        elif left or right:
+            # Context line (starts with ' ' or is empty inside a hunk)
+            out.append(f"L{left:<5}R{right:<4}{line}")
+            left += 1
+            right += 1
+        else:
+            out.append(line)
+
+    return "\n".join(out)
+
+
 def _sanitize_untrusted(text: str) -> str:
     """Strip fake delimiter tags from untrusted PR content.
 
@@ -227,7 +272,7 @@ def build_user_message(
         lines.append("")
     lines.append("Diff:")
     lines.append("```diff")
-    lines.append(_sanitize_untrusted(diff_text))
+    lines.append(annotate_diff(_sanitize_untrusted(diff_text)))
     lines.append("```")
     lines.append("</untrusted-pr-content>")
 
