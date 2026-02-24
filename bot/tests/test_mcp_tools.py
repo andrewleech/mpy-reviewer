@@ -1,4 +1,4 @@
-"""Tests for bot.mcp_tools — CI inspection tools."""
+"""Tests for bot.mcp_tools — review-posting and CI inspection tools."""
 
 import io
 import os
@@ -231,3 +231,149 @@ class TestGetWorkflowRunLog:
             result = ci_tools["get_workflow_run_log"]("micropython", "micropython", 42)
         assert "error" in result
         assert "ZIP" in result["error"]
+
+
+# --- create_review error handling ---
+
+class TestCreateReviewErrors:
+    def test_success(self, ci_tools):
+        with patch("bot.github_api.github_request", return_value={"id": 42}):
+            result = ci_tools["create_review"]("micropython", "micropython", 1)
+        assert result == {"review_id": 42}
+
+    def test_404_returns_error(self, ci_tools):
+        err = urllib.error.HTTPError("", 404, "Not Found", None, BytesIO(b"PR not found"))
+        with patch("bot.github_api.github_request", side_effect=err):
+            result = ci_tools["create_review"]("micropython", "micropython", 999)
+        assert "error" in result
+        assert result["review_id"] is None
+        assert "404" in result["error"]
+
+    def test_500_returns_error(self, ci_tools):
+        err = urllib.error.HTTPError("", 500, "Server Error", None, BytesIO(b""))
+        with patch("bot.github_api.github_request", side_effect=err):
+            result = ci_tools["create_review"]("micropython", "micropython", 1)
+        assert "error" in result
+        assert result["review_id"] is None
+
+    def test_network_error_returns_error(self, ci_tools):
+        err = urllib.error.URLError("Connection refused")
+        with patch("bot.github_api.github_request", side_effect=err):
+            result = ci_tools["create_review"]("micropython", "micropython", 1)
+        assert "error" in result
+        assert "Network error" in result["error"]
+        assert result["review_id"] is None
+
+    def test_422_pending_review_recovery(self, ci_tools):
+        """422 with 'pending review' triggers cleanup and retry."""
+        err = urllib.error.HTTPError("", 422, "Unprocessable", None,
+                                     BytesIO(b"User can only have one pending review"))
+        reviews_list = [{"id": 10, "state": "PENDING"}]
+        retry_result = {"id": 99}
+
+        call_count = 0
+        def mock_request(method, url, payload=None, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise err
+            if method == "GET":
+                return reviews_list
+            if method == "DELETE":
+                return None
+            return retry_result
+
+        with patch("bot.github_api.github_request", side_effect=mock_request):
+            result = ci_tools["create_review"]("micropython", "micropython", 1)
+        assert result == {"review_id": 99}
+
+    def test_422_non_pending_returns_error(self, ci_tools):
+        """422 without 'pending review' in body returns error."""
+        err = urllib.error.HTTPError("", 422, "Unprocessable", None,
+                                     BytesIO(b"Some other validation error"))
+        with patch("bot.github_api.github_request", side_effect=err):
+            result = ci_tools["create_review"]("micropython", "micropython", 1)
+        assert "error" in result
+        assert "422" in result["error"]
+
+
+# --- add_review_comment error handling ---
+
+class TestAddReviewCommentErrors:
+    def test_success(self, ci_tools):
+        with patch("bot.github_api.github_request", return_value={"id": 123}):
+            result = ci_tools["add_review_comment"](
+                "micropython", "micropython", 1, 42, "file.c", "comment", 10,
+            )
+        assert result == {"comment_id": 123}
+
+    def test_422_returns_error_with_context(self, ci_tools):
+        err = urllib.error.HTTPError("", 422, "Unprocessable", None,
+                                     BytesIO(b"line not part of diff"))
+        with patch("bot.github_api.github_request", side_effect=err):
+            result = ci_tools["add_review_comment"](
+                "micropython", "micropython", 1, 42, "ports/stm32/main.c", "bad line", 999, "RIGHT",
+            )
+        assert "error" in result
+        assert result["comment_id"] is None
+        assert result["failed_path"] == "ports/stm32/main.c"
+        assert result["failed_line"] == 999
+        assert result["failed_side"] == "RIGHT"
+        assert "422" in result["error"]
+
+    def test_404_returns_error(self, ci_tools):
+        err = urllib.error.HTTPError("", 404, "Not Found", None, BytesIO(b""))
+        with patch("bot.github_api.github_request", side_effect=err):
+            result = ci_tools["add_review_comment"](
+                "micropython", "micropython", 1, 42, "file.c", "comment", 10,
+            )
+        assert "error" in result
+        assert "404" in result["error"]
+        assert result["failed_path"] == "file.c"
+
+    def test_network_error_returns_error(self, ci_tools):
+        err = urllib.error.URLError("timeout")
+        with patch("bot.github_api.github_request", side_effect=err):
+            result = ci_tools["add_review_comment"](
+                "micropython", "micropython", 1, 42, "file.c", "comment", 10,
+            )
+        assert "error" in result
+        assert "Network error" in result["error"]
+        assert result["failed_path"] == "file.c"
+
+
+# --- submit_review error handling ---
+
+class TestSubmitReviewErrors:
+    def test_success(self, ci_tools):
+        with patch("bot.github_api.github_request", return_value=None):
+            result = ci_tools["submit_review"](
+                "micropython", "micropython", 1, 42, "summary",
+            )
+        assert result == {"status": "submitted"}
+
+    def test_404_returns_error(self, ci_tools):
+        err = urllib.error.HTTPError("", 404, "Not Found", None, BytesIO(b""))
+        with patch("bot.github_api.github_request", side_effect=err):
+            result = ci_tools["submit_review"](
+                "micropython", "micropython", 1, 42, "summary",
+            )
+        assert result["status"] == "failed"
+        assert "error" in result
+        assert "404" in result["error"]
+
+    def test_network_error_returns_error(self, ci_tools):
+        err = urllib.error.URLError("Connection reset")
+        with patch("bot.github_api.github_request", side_effect=err):
+            result = ci_tools["submit_review"](
+                "micropython", "micropython", 1, 42, "summary",
+            )
+        assert result["status"] == "failed"
+        assert "Network error" in result["error"]
+
+    def test_invalid_event_still_raises(self, ci_tools):
+        """ValueError for invalid event should still propagate."""
+        with pytest.raises(ValueError, match="COMMENT"):
+            ci_tools["submit_review"](
+                "micropython", "micropython", 1, 42, "summary", event="APPROVE",
+            )

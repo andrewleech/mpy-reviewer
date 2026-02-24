@@ -61,7 +61,7 @@ def register_bot_tools(mcp):
             commit_sha: Optional commit SHA to pin the review to.
 
         Returns:
-            Dict with 'review_id'.
+            Dict with 'review_id', or 'error' with 'review_id': None on failure.
         """
         _check_repo(owner, repo)
         payload = {"commit_id": commit_sha} if commit_sha else None
@@ -73,31 +73,39 @@ def register_bot_tools(mcp):
             )
             return {"review_id": result["id"]}
         except urllib.error.HTTPError as e:
-            if e.code != 422:
-                raise
             error_body = e.read().decode()[:500] if e.fp else ""
-            if "pending review" not in error_body.lower():
-                logger.error("Unexpected 422 creating review on PR #%d: %s", pr_number, error_body)
-                raise
-            # 422 = "User can only have one pending review per pull request".
-            # Dismiss the stale pending review and create a fresh one.
-            logger.warning("Pending review already exists on PR #%d, deleting it", pr_number)
-            reviews = _github_api.github_request(
-                "GET", f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
-            )
-            for rev in reviews:
-                if rev.get("state") == "PENDING":
-                    _github_api.github_request(
-                        "DELETE",
-                        f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews/{rev['id']}",
+            if e.code == 422 and "pending review" in error_body.lower():
+                # "User can only have one pending review per pull request".
+                # Dismiss the stale pending review and create a fresh one.
+                logger.warning("Pending review already exists on PR #%d, deleting it", pr_number)
+                try:
+                    reviews = _github_api.github_request(
+                        "GET", f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
                     )
-                    logger.info("Deleted stale pending review %d", rev["id"])
-            result = _github_api.github_request(
-                "POST",
-                f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews",
-                payload,
+                    for rev in reviews:
+                        if rev.get("state") == "PENDING":
+                            _github_api.github_request(
+                                "DELETE",
+                                f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews/{rev['id']}",
+                            )
+                            logger.info("Deleted stale pending review %d", rev["id"])
+                    result = _github_api.github_request(
+                        "POST",
+                        f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews",
+                        payload,
+                    )
+                    return {"review_id": result["id"]}
+                except (urllib.error.HTTPError, urllib.error.URLError) as retry_err:
+                    logger.error("create_review retry failed on PR #%d: %s", pr_number, retry_err)
+                    return {"error": f"Retry after stale review cleanup failed: {retry_err}", "review_id": None}
+            logger.warning(
+                "create_review failed (HTTP %d) on PR #%d: %s",
+                e.code, pr_number, error_body,
             )
-            return {"review_id": result["id"]}
+            return {"error": f"HTTP {e.code}: {error_body or e.reason}", "review_id": None}
+        except urllib.error.URLError as e:
+            logger.warning("create_review network error on PR #%d: %s", pr_number, e)
+            return {"error": f"Network error: {e.reason}", "review_id": None}
 
     @mcp.tool()
     def add_review_comment(
@@ -129,12 +137,35 @@ def register_bot_tools(mcp):
         payload = {"path": path, "body": body, "side": side}
         if line is not None:
             payload["line"] = line
-        result = _github_api.github_request(
-            "POST",
-            f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews/{review_id}/comments",
-            payload,
-        )
-        return {"comment_id": result["id"]}
+        try:
+            result = _github_api.github_request(
+                "POST",
+                f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews/{review_id}/comments",
+                payload,
+            )
+            return {"comment_id": result["id"]}
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode()[:500] if e.fp else ""
+            logger.warning(
+                "add_review_comment failed (HTTP %d) on %s line %s: %s",
+                e.code, path, line, error_body,
+            )
+            return {
+                "error": f"HTTP {e.code}: {error_body or e.reason}",
+                "comment_id": None,
+                "failed_path": path,
+                "failed_line": line,
+                "failed_side": side,
+            }
+        except urllib.error.URLError as e:
+            logger.warning("add_review_comment network error on %s line %s: %s", path, line, e)
+            return {
+                "error": f"Network error: {e.reason}",
+                "comment_id": None,
+                "failed_path": path,
+                "failed_line": line,
+                "failed_side": side,
+            }
 
     @mcp.tool()
     def submit_review(
@@ -156,19 +187,30 @@ def register_bot_tools(mcp):
             event: Review event — only "COMMENT" is permitted.
 
         Returns:
-            Dict with 'status'.
+            Dict with 'status', or 'error' with 'status': 'failed' on failure.
         """
         _check_repo(owner, repo)
         if event != "COMMENT":
             raise ValueError(
                 f"Only 'COMMENT' event is permitted, got '{event}'"
             )
-        _github_api.github_request(
-            "POST",
-            f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews/{review_id}/events",
-            {"body": body, "event": event},
-        )
-        return {"status": "submitted"}
+        try:
+            _github_api.github_request(
+                "POST",
+                f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews/{review_id}/events",
+                {"body": body, "event": event},
+            )
+            return {"status": "submitted"}
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode()[:500] if e.fp else ""
+            logger.warning(
+                "submit_review failed (HTTP %d) on PR #%d review %d: %s",
+                e.code, pr_number, review_id, error_body,
+            )
+            return {"error": f"HTTP {e.code}: {error_body or e.reason}", "status": "failed"}
+        except urllib.error.URLError as e:
+            logger.warning("submit_review network error on PR #%d review %d: %s", pr_number, review_id, e)
+            return {"error": f"Network error: {e.reason}", "status": "failed"}
 
     @mcp.tool()
     def get_check_runs(
