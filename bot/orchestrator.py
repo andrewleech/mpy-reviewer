@@ -96,6 +96,7 @@ async def run_review(
         additional_system_prompt=config.prompt.additional_system_prompt,
         top_k=config.review.top_k,
         include_codebase=config.review.include_codebase,
+        check_ci=config.review.check_ci,
     )
 
     user_message = build_user_message(
@@ -135,6 +136,9 @@ async def run_review(
             "mcp__mpy-reviewer__create_review",
             "mcp__mpy-reviewer__add_review_comment",
             "mcp__mpy-reviewer__submit_review",
+            "mcp__mpy-reviewer__get_check_runs",
+            "mcp__mpy-reviewer__get_check_run_annotations",
+            "mcp__mpy-reviewer__get_workflow_run_log",
             "Read", "Glob", "Grep",
         ]),
     ]
@@ -313,22 +317,16 @@ async def _update_checkout(pr_number: int, head_sha: str) -> bool:
 
 
 def _build_mcp_config(config: BotConfig) -> dict:
-    """Build the MCP client config JSON for claude -p."""
+    """Build the MCP client config JSON for claude -p.
+
+    Uses SSE transport to connect to the persistent mcp-server container,
+    keeping the embedding model warm between reviews.
+    """
     return {
         "mcpServers": {
             "mpy-reviewer": {
-                "command": "python",
-                "args": ["mcp_server.py"],
-                "cwd": "/app",
-                "env": {
-                    "GITHUB_TOKEN_FILE": os.environ.get(
-                        "GITHUB_TOKEN_FILE", "/var/run/token/github_token"
-                    ),
-                    "MPY_CHECKOUT": os.environ.get(
-                        "MPY_CHECKOUT", "/workspace/micropython"
-                    ),
-                    "MPY_REVIEWER_BOT_MODE": "1",
-                },
+                "type": "sse",
+                "url": f"{config.mcp.url}/sse",
             }
         }
     }

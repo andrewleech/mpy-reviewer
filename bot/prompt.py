@@ -9,6 +9,7 @@ def build_system_prompt(
     additional_system_prompt: str = "",
     top_k: int = 8,
     include_codebase: bool = True,
+    check_ci: bool = True,
 ) -> str:
     """Assemble the system prompt for a bot-driven review.
 
@@ -16,6 +17,7 @@ def build_system_prompt(
         additional_system_prompt: Extra guidance from bot config (verbatim).
         top_k: Number of review examples for the RAG tool to retrieve.
         include_codebase: Whether to include MicroPython codebase context.
+        check_ci: Whether to include CI inspection instructions.
 
     Returns:
         Complete system prompt string.
@@ -41,16 +43,48 @@ def build_system_prompt(
     tool_instructions = (
         "## Review Workflow\n"
         "\n"
-        f"1. Use the `review_pr` or `review_diff` MCP tool with `top_k={top_k}` "
-        f"and `include_codebase={'true' if include_codebase else 'false'}` to retrieve "
-        "relevant past review examples from the RAG database.\n"
+        f"1. Use the `review_diff` MCP tool with the diff from the user message, "
+        f"`top_k={top_k}`, and `include_codebase={'true' if include_codebase else 'false'}` "
+        "to retrieve relevant past review examples from the RAG database. "
+        "Do NOT use `review_pr` — the diff is already provided.\n"
         "2. Read the example files returned to calibrate your review style.\n"
         "3. Analyze the PR diff provided in the user message.\n"
         "4. Call `create_review(owner, repo, pr_number)` to start a pending review.\n"
-        "5. For each issue found, call `add_review_comment(owner, repo, pr_number, "
-        "review_id, path, body, line, side)` to attach an inline comment.\n"
+        "5. For EACH issue found, call `add_review_comment(owner, repo, pr_number, "
+        "review_id, path, body, line, side)` to attach an inline comment at the "
+        "relevant line. You MUST post issues as inline comments — do NOT put "
+        "line-specific feedback in the summary body.\n"
         "6. Call `submit_review(owner, repo, pr_number, review_id, body)` with a "
-        "brief summary to make the review visible.\n"
+        "short summary (2-4 sentences max). The summary should only give a high-level "
+        "overview — all specific feedback belongs in inline comments from step 5.\n"
+        "\n"
+        "### Inline comment constraints\n"
+        "\n"
+        "The `line` parameter in `add_review_comment` MUST reference a line number "
+        "that appears inside a diff hunk (the new-file line number from the `+` side "
+        "of the diff). The GitHub API returns 422 for lines outside the diff context. "
+        "Only comment on lines covered by the diff — if you need to mention code "
+        "outside the diff, put it in the review summary body instead.\n"
+        "\n"
+        "If an `add_review_comment` call fails with 422, skip that comment and move "
+        "on. Do NOT retry with the same parameters or give up on remaining comments.\n"
+        "\n"
+        "### Suggested fixes\n"
+        "\n"
+        "When the fix is obvious (renaming, typos, wrong operator, missing keyword, "
+        "style issues), include a GitHub suggestion block in the comment body so the "
+        "author can apply it with one click:\n"
+        "\n"
+        "````\n"
+        "```suggestion\n"
+        "corrected line(s) here\n"
+        "```\n"
+        "````\n"
+        "\n"
+        "The suggestion must contain the exact replacement for the line(s) the comment "
+        "is attached to. Only use suggestions for single-line or small multi-line fixes "
+        "where you are confident in the correction. For larger or ambiguous changes, "
+        "describe the fix in prose instead.\n"
         "\n"
         "Use `search_reviews` for targeted follow-up queries if you need more "
         "examples for a specific pattern (e.g. memory allocation, error handling).\n"
@@ -60,6 +94,10 @@ def build_system_prompt(
     )
     sections.append(tool_instructions)
 
+    # CI inspection section
+    if check_ci:
+        sections.append(_build_ci_section())
+
     # Security section
     sections.append(_build_security_section())
 
@@ -68,6 +106,28 @@ def build_system_prompt(
         sections.append(additional_system_prompt.strip())
 
     return "\n\n".join(sections)
+
+
+def _build_ci_section() -> str:
+    return (
+        "## CI Inspection\n"
+        "\n"
+        "After composing your code review (steps 1-6), inspect CI status for the "
+        "PR's head commit:\n"
+        "\n"
+        "- Call `get_check_runs(owner, repo, ref)` with the head commit SHA to list CI jobs.\n"
+        "- For each FAILED check run, call `get_check_run_annotations(owner, repo, check_run_id)`. "
+        "Annotations contain structured file+line findings from linting tools (ruff, codespell, "
+        "code formatting) — these are the most actionable.\n"
+        "- Only call `get_workflow_run_log(owner, repo, workflow_run_id)` if annotations are "
+        "empty and the failure is relevant to the PR (build errors, test failures). Skip log "
+        "retrieval for unrelated or infrastructure failures.\n"
+        "- If CI issues are found, include a **CI Issues** section in your review summary. "
+        "Be specific: \"ruff reports unused import `os` on line 12 of `ports/esp32/main.c`. "
+        "Remove it.\" Do not say \"CI is failing\" without details.\n"
+        "\n"
+        "Skip CI inspection entirely if all check runs are successful or still pending."
+    )
 
 
 def _build_security_section() -> str:

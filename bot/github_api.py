@@ -90,3 +90,59 @@ def github_request(
     except urllib.error.URLError as e:
         logger.error("GitHub API connection error: %s %s -> %s", method, endpoint, e)
         raise
+
+
+def github_request_binary(
+    endpoint: str,
+    token: str | None = None,
+    max_bytes: int = 10 * 1024 * 1024,
+) -> bytes:
+    """Download binary data from a GitHub REST API endpoint.
+
+    Used for endpoints that return non-JSON payloads (e.g. workflow log ZIPs).
+
+    Args:
+        endpoint: API endpoint path.
+        token: Override token. If None, reads from GITHUB_TOKEN_FILE.
+        max_bytes: Maximum response size in bytes (default 10MB).
+
+    Returns:
+        Raw response bytes.
+
+    Raises:
+        urllib.error.HTTPError: On non-2xx response.
+        RuntimeError: If no token is available.
+        ValueError: If response exceeds max_bytes.
+    """
+    if token is None:
+        token = _read_token()
+    if token is None:
+        raise RuntimeError(
+            f"No GitHub token available. Set GITHUB_TOKEN_FILE env var "
+            f"or write token to {DEFAULT_TOKEN_FILE}"
+        )
+
+    url = f"{GITHUB_API_BASE}{endpoint}"
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = resp.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                raise ValueError(
+                    f"Response from {endpoint} exceeds {max_bytes} bytes limit"
+                )
+            return data
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode()[:200] if e.fp else ""
+        logger.error(
+            "GitHub API error: GET %s -> %d: %s",
+            endpoint, e.code, error_body,
+        )
+        raise
+    except urllib.error.URLError as e:
+        logger.error("GitHub API connection error: GET %s -> %s", endpoint, e)
+        raise

@@ -70,6 +70,7 @@ class ReviewConfig:
     timeout_seconds: int = 600
     top_k: int = 8
     include_codebase: bool = True
+    check_ci: bool = True
 
 
 @dataclass

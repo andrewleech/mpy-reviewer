@@ -70,3 +70,15 @@ def test_sanitize_strips_injected_delimiters():
     )
     assert msg.count("<untrusted-pr-content>") == 1
     assert msg.count("</untrusted-pr-content>") == 1
+
+
+def test_system_prompt_includes_ci_section_by_default():
+    prompt = build_system_prompt()
+    assert "CI Inspection" in prompt
+    assert "get_check_runs" in prompt
+
+
+def test_system_prompt_excludes_ci_section_when_disabled():
+    prompt = build_system_prompt(check_ci=False)
+    assert "CI Inspection" not in prompt
+    assert "get_check_runs" not in prompt

@@ -24,6 +24,7 @@ def _make_config():
     config.review.timeout_seconds = 10
     config.review.top_k = 8
     config.review.include_codebase = False
+    config.review.check_ci = True
     config.prompt.additional_system_prompt = ""
     config.auth.claude_oauth_path = ""
     config.mcp.url = "http://localhost:9090"
@@ -209,8 +210,8 @@ def test_build_mcp_config():
     result = _build_mcp_config(config)
     assert "mcpServers" in result
     assert "mpy-reviewer" in result["mcpServers"]
-    assert result["mcpServers"]["mpy-reviewer"]["command"] == "python"
-    assert "mcp_server.py" in result["mcpServers"]["mpy-reviewer"]["args"]
+    assert result["mcpServers"]["mpy-reviewer"]["type"] == "sse"
+    assert result["mcpServers"]["mpy-reviewer"]["url"] == "http://localhost:9090/sse"
 
 
 def test_write_temp_json():
@@ -292,3 +293,28 @@ async def test_update_checkout_sha_mismatch():
         with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
             result = await _update_checkout(1, "expected_sha")
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_run_review_allowed_tools_include_ci():
+    """Verify CI tools are in the --allowedTools list."""
+    auth = MagicMock()
+    auth.get_token.return_value = "tok"
+    captured_cmd = None
+
+    with _mock_run_review_env() as mock_proc:
+        async def capture_exec(*args, **kwargs):
+            nonlocal captured_cmd
+            captured_cmd = args
+            return mock_proc
+        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+            await run_review(make_review_request(), _make_config(), auth=auth)
+
+    assert captured_cmd is not None
+    # Find the --allowedTools argument value
+    cmd_list = list(captured_cmd)
+    idx = cmd_list.index("--allowedTools")
+    tools_str = cmd_list[idx + 1]
+    assert "mcp__mpy-reviewer__get_check_runs" in tools_str
+    assert "mcp__mpy-reviewer__get_check_run_annotations" in tools_str
+    assert "mcp__mpy-reviewer__get_workflow_run_log" in tools_str
