@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS themes (
     FOREIGN KEY (domain_id) REFERENCES domains(id)
 );
 
--- Comment categorization
+-- Comment categorization (13-field enhanced schema)
 CREATE TABLE IF NOT EXISTS comment_categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     comment_id INTEGER NOT NULL,
@@ -88,6 +88,19 @@ CREATE TABLE IF NOT EXISTS comment_categories (
     severity TEXT,  -- 'blocking', 'suggestion', 'nitpick'
     is_style_example INTEGER DEFAULT 0,
     categorized_at TEXT,
+    -- Enhanced categorization fields
+    component TEXT,          -- py_core, extmod, port_specific, drivers, tools, tests, docs, build_system, examples
+    port TEXT,               -- esp32, stm32, rp2, unix, etc. (NULL for generic)
+    subsystem TEXT,          -- bluetooth, usb, uart, gc, vm, etc. (NULL if not applicable)
+    language_context TEXT,   -- c_code, python_code, documentation, makefile, cmake, shell_script, yaml
+    code_construct TEXT,     -- function, macro, struct, typedef, class, module, test_case, etc.
+    concern_type TEXT,       -- correctness, safety, api_design, style, performance, portability, etc.
+    feedback_type TEXT,      -- question, suggestion, requirement, information, praise, merge
+    is_pattern INTEGER DEFAULT 0,
+    cpython_related INTEGER DEFAULT 0,
+    has_code_suggestion INTEGER DEFAULT 0,
+    keywords TEXT,           -- JSON array of 2-5 technical terms
+    UNIQUE(comment_id, comment_type),
     FOREIGN KEY (domain_id) REFERENCES domains(id)
 );
 
@@ -98,6 +111,8 @@ CREATE INDEX IF NOT EXISTS idx_issue_comments_pr ON issue_comments(pr_number);
 CREATE INDEX IF NOT EXISTS idx_reviews_pr ON reviews(pr_number);
 CREATE INDEX IF NOT EXISTS idx_comment_categories_domain ON comment_categories(domain_id);
 CREATE INDEX IF NOT EXISTS idx_comment_categories_severity ON comment_categories(severity);
+CREATE INDEX IF NOT EXISTS idx_comment_categories_component ON comment_categories(component);
+CREATE INDEX IF NOT EXISTS idx_comment_categories_language ON comment_categories(language_context);
 CREATE INDEX IF NOT EXISTS idx_prs_created ON prs(created_at);
 
 -- Insert default domains

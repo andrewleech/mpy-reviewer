@@ -247,98 +247,19 @@ search:
 
 The usage logs help identify performance bottlenecks, measure the impact of different options (--rerank, --codebase), and track success rates over time.
 
-## Complete Workflow: Collecting and Indexing New Reviews
+## Data Pipeline
 
-To extend the database with newer review data:
-
-### Step 1: Collect New Reviews from GitHub
-
-```bash
-cd /home/anl/mpy/mpy-reviewer
-source venv/bin/activate
-
-# Run collection (incremental if previous sync exists)
-python scripts/collect.py
-
-# This will:
-# - Search for PRs where the lead maintainer commented
-# - Use year-based pagination to work around GitHub's 1000-result limit
-# - Fetch PR details, review comments, issue comments, and reviews
-# - Store in data/reviews.db
-# - Checkpoint progress for resume capability
-
-# Time: ~20-30 min for full collection, faster for incremental
-# Rate: Limited by GitHub API (~5000 requests/hour)
-```
-
-### Step 2: Categorize New Comments with Claude CLI
-
-```bash
-# Run categorization (uses checkpoint/resume)
-nohup python scripts/categorize_headless.py > logs/categorization_$(date +%Y%m%d_%H%M%S).log 2>&1 &
-
-# Monitor progress
-tail -f logs/categorization_*.log
-
-# Check categorization status
-python -c "
-import sqlite3
-conn = sqlite3.connect('data/reviews.db')
-total = conn.execute('SELECT COUNT(*) FROM review_comments').fetchone()[0]
-total += conn.execute('SELECT COUNT(*) FROM issue_comments').fetchone()[0]
-total += conn.execute('SELECT COUNT(*) FROM reviews WHERE body IS NOT NULL').fetchone()[0]
-categorized = conn.execute('SELECT COUNT(*) FROM comment_categories WHERE theme != \"FAILED_CATEGORIZATION\"').fetchone()[0]
-print(f'Categorized: {categorized}/{total} ({100*categorized/total:.1f}%)')
-"
-
-# Cost: ~$2-4 total for full dataset (using Haiku)
-# Time: ~40-100 minutes for full dataset
-```
-
-### Step 3: Build Vector Index
-
-For large datasets or memory-constrained systems, use the resume-capable indexing approach:
-
-```bash
-python scripts/build_index_resume.py
-```
-
-Run with:
+The database is extended via a 3-stage pipeline: collect → categorize → index. Each stage is resumable.
 
 ```bash
 source venv/bin/activate
-python scripts/build_index_resume.py 2>&1 | tee logs/index_build_$(date +%Y%m%d_%H%M%S).log
-
-# Or run in background
-nohup python scripts/build_index_resume.py > logs/index_build.log 2>&1 &
-tail -f logs/index_build.log
+python scripts/collect.py                # 1. Fetch from GitHub API (requires gh CLI)
+python scripts/categorize_headless.py    # 2. Classify via Claude CLI
+python scripts/build_index_resume.py     # 3. Embed + build vec0/FTS5 index
+mpy-reviewer stats                       # 4. Verify
 ```
 
-**Performance Characteristics:**
-- Time: ~5 hours for 18,614 records on CPU (WSL2, 45GB RAM)
-- Memory: ~6GB peak usage with batch_size=4
-- Speed: Variable 2-13 items/sec depending on text length
-- Model: CodeRankEmbed (768 dimensions)
-
-### Step 4: Verify the Index
-
-```bash
-# Check index status
-mpy-reviewer stats
-
-# Test a search
-mpy-reviewer search "memory allocation" -k 5
-
-# Python verification
-python -c "
-from rag.indexer import get_sqlite_connection, _vec_table_exists
-conn = get_sqlite_connection()
-print(f'Index exists: {_vec_table_exists(conn)}')
-row = conn.execute('SELECT count(*) FROM vec_reviews').fetchone()
-print(f'Total records: {row[0]}')
-conn.close()
-"
-```
+See [docs/DATA_PIPELINE.md](docs/DATA_PIPELINE.md) for prerequisites, hardcoded values, performance notes, and troubleshooting.
 
 ## Database Schema
 

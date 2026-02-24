@@ -51,61 +51,17 @@ mpy-reviewer/
 
 ## Data Pipeline
 
-The review database is built in three stages: collection, categorization, and indexing.
-
-### 1. Collect Reviews from GitHub
+The review database is built in three stages: collect → categorize → index. Each stage is resumable and incremental.
 
 ```bash
 source venv/bin/activate
-python scripts/collect.py
+python scripts/collect.py                # 1. Fetch from GitHub API
+python scripts/categorize_headless.py    # 2. Classify via Claude CLI
+python scripts/build_index_resume.py     # 3. Embed + build vec0/FTS5 index
+mpy-reviewer stats                       # 4. Verify
 ```
 
-This fetches PR metadata, review comments, issue comments, and review verdicts from micropython/micropython via the GitHub API. Collection is incremental — it checkpoints progress and picks up where it left off.
-
-**Performance:** ~674 PRs/hour, limited by GitHub API rate limits (5000 requests/hour). Full collection from scratch takes 20-30 minutes; incremental runs are faster.
-
-**GitHub API notes:**
-- The search API returns max 1000 results per query. The script works around this by querying year-by-year (2013-present).
-- Rate limiting is handled automatically with ~0.72s delay between requests.
-
-### 2. Categorize Comments
-
-```bash
-nohup python scripts/categorize_headless.py > logs/categorization_$(date +%Y%m%d_%H%M%S).log 2>&1 &
-tail -f logs/categorization_*.log
-```
-
-Categorization uses Claude CLI (`claude -p`) in headless mode with JSON schema enforcement. Each comment is classified across 13 fields using the Haiku model for cost efficiency.
-
-**Performance:** 40-100 minutes for the full dataset, ~$2-4 total cost.
-
-**Check progress:**
-```bash
-python -c "
-import sqlite3
-conn = sqlite3.connect('data/reviews.db')
-total = conn.execute('SELECT COUNT(*) FROM review_comments').fetchone()[0]
-total += conn.execute('SELECT COUNT(*) FROM issue_comments').fetchone()[0]
-total += conn.execute('SELECT COUNT(*) FROM reviews WHERE body IS NOT NULL').fetchone()[0]
-categorized = conn.execute('SELECT COUNT(*) FROM comment_categories WHERE theme != \"FAILED_CATEGORIZATION\"').fetchone()[0]
-print(f'Categorized: {categorized}/{total} ({100*categorized/total:.1f}%)')
-"
-```
-
-### 3. Build Vector Index
-
-```bash
-python scripts/build_index_resume.py 2>&1 | tee logs/index_build_$(date +%Y%m%d_%H%M%S).log
-```
-
-Embeds all categorized comments using CodeRankEmbed (768 dimensions) into a sqlite-vec `vec0` virtual table with an FTS5 full-text index alongside it.
-
-**Performance:** ~5 hours for 18,614 records on CPU (WSL2, 45GB RAM). The script supports resume, so interruptions are safe. Memory usage peaks at ~6GB with default batch size.
-
-**Verify:**
-```bash
-mpy-reviewer stats
-```
+See [docs/DATA_PIPELINE.md](docs/DATA_PIPELINE.md) for prerequisites, hardcoded values, performance characteristics, and troubleshooting.
 
 ## Database Schema
 

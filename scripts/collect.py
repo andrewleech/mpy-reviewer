@@ -11,7 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -355,7 +355,7 @@ def main():
             set_sync_state(conn, "checkpoint_pr", str(pr_number))
 
     # Update sync timestamp
-    set_sync_state(conn, "last_sync", datetime.utcnow().strftime("%Y-%m-%d"))
+    set_sync_state(conn, "last_sync", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
 
     # Print summary
     cursor = conn.execute("SELECT COUNT(*) FROM prs")

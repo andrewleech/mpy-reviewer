@@ -286,10 +286,9 @@ For more details, see:
 
 | Document | Contents |
 |----------|----------|
-| README_RAG.md | Full architecture and configuration |
-| IMPLEMENTATION_PLAN.md | Technical design and component details |
-| REVIEW_DATABASE_GUIDE.md | Database schema and data collection |
-| DEVELOPMENT_STATUS.md | Current development state |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, repository structure, schema reference |
+| [docs/DATA_PIPELINE.md](docs/DATA_PIPELINE.md) | Data collection, categorization, and indexing pipeline |
+| [CLAUDE.md](CLAUDE.md) | Full project context for AI agents |
 
 ## Getting Help
 
