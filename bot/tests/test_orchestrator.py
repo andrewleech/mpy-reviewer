@@ -209,7 +209,8 @@ def test_build_mcp_config():
     result = _build_mcp_config(config)
     assert "mcpServers" in result
     assert "mpy-reviewer" in result["mcpServers"]
-    assert result["mcpServers"]["mpy-reviewer"]["url"] == "http://localhost:9090/mcp"
+    assert result["mcpServers"]["mpy-reviewer"]["command"] == "python"
+    assert "mcp_server.py" in result["mcpServers"]["mpy-reviewer"]["args"]
 
 
 def test_write_temp_json():

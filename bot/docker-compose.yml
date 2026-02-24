@@ -1,16 +1,21 @@
 # Deployment:
 #   1. Copy bot/config/bot.example.toml to bot/config/bot.toml and fill in secrets
 #   2. Place the GitHub App private key at bot/config/bot-private-key.pem
-#   3. Place Claude OAuth credentials in bot/config/claude-oauth/
+#   3. Copy Claude OAuth credentials: ./bot/config/refresh-credentials.sh
+#      (copies ~/.claude.json and ~/.claude/.credentials.json into bot/config/claude-oauth/)
 #   4. Run: docker compose -f bot/docker-compose.yml up -d
 #   5. Point GitHub webhook URL to https://<host>:${WEBHOOK_PORT:-8080}/webhook
+#
+# Credential refresh (no restart needed):
+#   ./bot/config/refresh-credentials.sh
+#   New credentials take effect on the next claude -p invocation.
 
 services:
   mcp-server:
     build:
       context: ..
       dockerfile: bot/Dockerfile
-    command: ["python", "mcp_server.py", "--transport", "streamable-http", "--port", "9090"]
+    command: ["python", "mcp_server.py", "--transport", "sse", "--port", "9090"]
     volumes:
       - mpy-checkout:/workspace/micropython
       - token-share:/var/run/token
@@ -20,7 +25,7 @@ services:
       - MPY_REVIEWER_BOT_MODE=1
     healthcheck:
       test: ["CMD", "python", "-c",
-             "import urllib.request; urllib.request.urlopen('http://localhost:9090/mcp')"]
+             "import socket; s=socket.create_connection(('localhost',9090),2); s.close()"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -40,14 +45,15 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    # Isolate /proc — system prompt appears in CLI args
-    pid: private
+    # TODO: re-enable when Docker supports it — isolates /proc so
+    # system prompt in claude -p args isn't visible to other containers.
+    # pid: private
     ports:
       - "${WEBHOOK_PORT:-8080}:8080"
     volumes:
       - ./config/bot.toml:/config/bot.toml:ro
       - ./config/bot-private-key.pem:/config/bot-private-key.pem:ro
-      - ./config/claude-oauth/:/config/claude-oauth/:ro
+      - ./config/claude-oauth/:/config/claude-oauth/
       - mpy-checkout:/workspace/micropython
       - token-share:/var/run/token
     environment:

@@ -121,9 +121,9 @@ async def run_review(
         "claude", "-p",
         "--model", config.review.model,
         "--output-format", "text",
+        "--dangerously-skip-permissions",
         "--system-prompt", system_prompt,
         "--mcp-config", mcp_config_path,
-        "--strict-mcp-config",
         "--allowedTools",
         ",".join([
             "mcp__mpy-reviewer__review_pr",
@@ -317,8 +317,18 @@ def _build_mcp_config(config: BotConfig) -> dict:
     return {
         "mcpServers": {
             "mpy-reviewer": {
-                "type": "streamable-http",
-                "url": f"{config.mcp.url}/mcp",
+                "command": "python",
+                "args": ["mcp_server.py"],
+                "cwd": "/app",
+                "env": {
+                    "GITHUB_TOKEN_FILE": os.environ.get(
+                        "GITHUB_TOKEN_FILE", "/var/run/token/github_token"
+                    ),
+                    "MPY_CHECKOUT": os.environ.get(
+                        "MPY_CHECKOUT", "/workspace/micropython"
+                    ),
+                    "MPY_REVIEWER_BOT_MODE": "1",
+                },
             }
         }
     }

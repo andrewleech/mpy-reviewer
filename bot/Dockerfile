@@ -48,11 +48,11 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 COPY bot/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Shared volumes
-VOLUME ["/workspace/micropython", "/config"]
+# Prepare volume mount points with correct ownership
+RUN mkdir -p /workspace/micropython /config /var/run/token && \
+    chown botuser:botuser /workspace/micropython /config /var/run/token
 
-# Token directory with correct permissions
-RUN mkdir -p /var/run/token && chown botuser:botuser /var/run/token
+VOLUME ["/workspace/micropython", "/config"]
 ENV GITHUB_TOKEN_FILE=/var/run/token/github_token
 ENV MPY_CHECKOUT=/workspace/micropython
 
