@@ -60,6 +60,7 @@ class DatasetBuilder:
         sample_size: int = 100,
         stratify_by: Optional[str] = None,
         output_path: Optional[Path] = None,
+        repo: str = "micropython/micropython",
     ) -> List[EvaluationSample]:
         """Build evaluation dataset by sampling PRs.
 
@@ -67,6 +68,7 @@ class DatasetBuilder:
             sample_size: Number of samples to generate
             stratify_by: Field to stratify by ("domain", "severity", "component")
             output_path: Optional path to save dataset as JSON
+            repo: GitHub repository slug
 
         Returns:
             List of evaluation samples
@@ -80,9 +82,9 @@ class DatasetBuilder:
         try:
             # Get diverse PRs
             if stratify_by:
-                samples = self._sample_stratified(cursor, sample_size, stratify_by)
+                samples = self._sample_stratified(cursor, sample_size, stratify_by, repo=repo)
             else:
-                samples = self._sample_random(cursor, sample_size)
+                samples = self._sample_random(cursor, sample_size, repo=repo)
 
             logger.info(f"Created evaluation dataset with {len(samples)} samples")
 
@@ -94,12 +96,15 @@ class DatasetBuilder:
         finally:
             conn.close()
 
-    def _sample_random(self, cursor, sample_size: int) -> List[EvaluationSample]:
+    def _sample_random(
+        self, cursor, sample_size: int, repo: str = "micropython/micropython",
+    ) -> List[EvaluationSample]:
         """Sample random PRs from database.
 
         Args:
             cursor: Database cursor
             sample_size: Number of samples
+            repo: GitHub repository slug
 
         Returns:
             List of evaluation samples
@@ -110,17 +115,19 @@ class DatasetBuilder:
         cursor.execute("""
             SELECT DISTINCT pr_number
             FROM review_comments
+            WHERE repo = ?
             UNION
             SELECT DISTINCT pr_number
             FROM issue_comments
+            WHERE repo = ?
             ORDER BY RANDOM()
             LIMIT ?
-        """, (sample_size,))
+        """, (repo, repo, sample_size))
 
         pr_numbers = [row[0] for row in cursor.fetchall()]
 
         for pr_number in pr_numbers:
-            sample = self._get_sample_for_pr(cursor, pr_number)
+            sample = self._get_sample_for_pr(cursor, pr_number, repo=repo)
             if sample:
                 samples.append(sample)
 
@@ -131,6 +138,7 @@ class DatasetBuilder:
         cursor,
         sample_size: int,
         stratify_by: str,
+        repo: str = "micropython/micropython",
     ) -> List[EvaluationSample]:
         """Sample PRs stratified by a field.
 
@@ -138,6 +146,7 @@ class DatasetBuilder:
             cursor: Database cursor
             sample_size: Number of samples
             stratify_by: Field to stratify by
+            repo: GitHub repository slug
 
         Returns:
             List of evaluation samples
@@ -156,28 +165,32 @@ class DatasetBuilder:
 
         for value in values:
             cursor.execute(f"""
-                SELECT DISTINCT pr_number
-                FROM comment_categories
-                WHERE {stratify_by} = ?
+                SELECT DISTINCT rc.pr_number
+                FROM comment_categories cc
+                JOIN review_comments rc ON cc.comment_id = rc.id AND cc.comment_type = 'review_comment'
+                WHERE cc.{stratify_by} = ? AND rc.repo = ?
                 ORDER BY RANDOM()
                 LIMIT ?
-            """, (value, samples_per_value))
+            """, (value, repo, samples_per_value))
 
             pr_numbers = [row[0] for row in cursor.fetchall()]
 
             for pr_number in pr_numbers:
-                sample = self._get_sample_for_pr(cursor, pr_number)
+                sample = self._get_sample_for_pr(cursor, pr_number, repo=repo)
                 if sample:
                     samples.append(sample)
 
         return samples
 
-    def _get_sample_for_pr(self, cursor, pr_number: int) -> Optional[EvaluationSample]:
+    def _get_sample_for_pr(
+        self, cursor, pr_number: int, repo: str = "micropython/micropython",
+    ) -> Optional[EvaluationSample]:
         """Get a complete sample for a PR.
 
         Args:
             cursor: Database cursor
             pr_number: PR number
+            repo: GitHub repository slug
 
         Returns:
             EvaluationSample or None
@@ -185,24 +198,28 @@ class DatasetBuilder:
         # Get PR title
         cursor.execute("""
             SELECT body FROM reviews
-            WHERE pr_number = ? AND body IS NOT NULL
+            WHERE pr_number = ? AND repo = ? AND body IS NOT NULL
             LIMIT 1
-        """, (pr_number,))
+        """, (pr_number, repo))
 
         review = cursor.fetchone()
         pr_title = review[0][:100] if review else f"PR #{pr_number}"
 
         # Get actual reviews (for evaluation)
         cursor.execute("""
-            SELECT comment_id, body, domain, severity
-            FROM review_comments
-            WHERE pr_number = ?
+            SELECT rc.id, rc.body, d.name, cc.severity
+            FROM review_comments rc
+            LEFT JOIN comment_categories cc ON rc.id = cc.comment_id AND cc.comment_type = 'review_comment'
+            LEFT JOIN domains d ON cc.domain_id = d.id
+            WHERE rc.pr_number = ? AND rc.repo = ?
             UNION
-            SELECT comment_id, body, domain, severity
-            FROM issue_comments
-            WHERE pr_number = ?
+            SELECT ic.id, ic.body, d.name, cc.severity
+            FROM issue_comments ic
+            LEFT JOIN comment_categories cc ON ic.id = cc.comment_id AND cc.comment_type = 'issue_comment'
+            LEFT JOIN domains d ON cc.domain_id = d.id
+            WHERE ic.pr_number = ? AND ic.repo = ?
             LIMIT 10
-        """, (pr_number, pr_number))
+        """, (pr_number, repo, pr_number, repo))
 
         reviews = [
             {
@@ -220,9 +237,9 @@ class DatasetBuilder:
         # Get a review comment with diff (for the "query")
         cursor.execute("""
             SELECT diff_hunk FROM review_comments
-            WHERE pr_number = ? AND diff_hunk IS NOT NULL
+            WHERE pr_number = ? AND repo = ? AND diff_hunk IS NOT NULL
             LIMIT 1
-        """, (pr_number,))
+        """, (pr_number, repo))
 
         diff_row = cursor.fetchone()
         diff_text = diff_row[0] if diff_row else f"# PR #{pr_number}"

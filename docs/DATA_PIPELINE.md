@@ -18,6 +18,14 @@ python scripts/collect.py
 
 Fetches PR metadata, review comments, issue comments, and review verdicts for all PRs where `dpgeorge` commented on `micropython/micropython`. Data is stored in `data/reviews.db`.
 
+**Multi-repo collection:** Use `--repo` to collect from other repositories:
+
+```bash
+python scripts/collect.py --repo micropython/micropython-lib
+```
+
+Each repo's sync state is tracked independently (`last_sync:{repo}` in `sync_state`). PR numbers are scoped by repo via `UNIQUE(repo, number)` in the `prs` table.
+
 **Behaviour:**
 - On first run: queries year-by-year (2013–present) to work around GitHub's 1000-result search limit.
 - On subsequent runs: incremental sync from the `last_sync` date stored in `sync_state`.
@@ -26,7 +34,7 @@ Fetches PR metadata, review comments, issue comments, and review verdicts for al
 **Hardcoded values** (in `scripts/collect.py`):
 | Constant | Value | Purpose |
 |----------|-------|---------|
-| `REPO` | `micropython/micropython` | Target repository |
+| `--repo` (default) | `micropython/micropython` | Target repository |
 | `REVIEWER` | `dpgeorge` | Lead maintainer login |
 | `REQUESTS_PER_HOUR` | 5000 | GitHub API rate limit budget |
 | `REQUEST_DELAY` | ~0.72s | Per-request throttle |

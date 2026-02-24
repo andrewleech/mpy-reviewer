@@ -3,7 +3,8 @@
 -- Pull requests
 CREATE TABLE IF NOT EXISTS prs (
     id INTEGER PRIMARY KEY,
-    number INTEGER UNIQUE NOT NULL,
+    number INTEGER NOT NULL,
+    repo TEXT NOT NULL DEFAULT 'micropython/micropython',
     title TEXT,
     body TEXT,
     author TEXT,
@@ -15,13 +16,15 @@ CREATE TABLE IF NOT EXISTS prs (
     commits INTEGER,
     additions INTEGER,
     deletions INTEGER,
-    base_branch TEXT
+    base_branch TEXT,
+    UNIQUE(repo, number)
 );
 
 -- Inline review comments (on specific code lines)
 CREATE TABLE IF NOT EXISTS review_comments (
     id INTEGER PRIMARY KEY,
     pr_number INTEGER NOT NULL,
+    repo TEXT NOT NULL DEFAULT 'micropython/micropython',
     body TEXT,
     path TEXT,
     line INTEGER,
@@ -30,29 +33,28 @@ CREATE TABLE IF NOT EXISTS review_comments (
     created_at TEXT,
     updated_at TEXT,
     in_reply_to_id INTEGER,
-    commit_id TEXT,
-    FOREIGN KEY (pr_number) REFERENCES prs(number)
+    commit_id TEXT
 );
 
 -- General PR discussion comments
 CREATE TABLE IF NOT EXISTS issue_comments (
     id INTEGER PRIMARY KEY,
     pr_number INTEGER NOT NULL,
+    repo TEXT NOT NULL DEFAULT 'micropython/micropython',
     body TEXT,
     created_at TEXT,
-    updated_at TEXT,
-    FOREIGN KEY (pr_number) REFERENCES prs(number)
+    updated_at TEXT
 );
 
 -- Review verdicts (APPROVED, CHANGES_REQUESTED, etc)
 CREATE TABLE IF NOT EXISTS reviews (
     id INTEGER PRIMARY KEY,
     pr_number INTEGER NOT NULL,
+    repo TEXT NOT NULL DEFAULT 'micropython/micropython',
     state TEXT,
     body TEXT,
     created_at TEXT,
-    commit_id TEXT,
-    FOREIGN KEY (pr_number) REFERENCES prs(number)
+    commit_id TEXT
 );
 
 -- Sync state for incremental updates
@@ -105,10 +107,11 @@ CREATE TABLE IF NOT EXISTS comment_categories (
 );
 
 -- Indexes for common queries
-CREATE INDEX IF NOT EXISTS idx_review_comments_pr ON review_comments(pr_number);
+CREATE INDEX IF NOT EXISTS idx_prs_repo ON prs(repo);
+CREATE INDEX IF NOT EXISTS idx_review_comments_pr ON review_comments(pr_number, repo);
 CREATE INDEX IF NOT EXISTS idx_review_comments_path ON review_comments(path);
-CREATE INDEX IF NOT EXISTS idx_issue_comments_pr ON issue_comments(pr_number);
-CREATE INDEX IF NOT EXISTS idx_reviews_pr ON reviews(pr_number);
+CREATE INDEX IF NOT EXISTS idx_issue_comments_pr ON issue_comments(pr_number, repo);
+CREATE INDEX IF NOT EXISTS idx_reviews_pr ON reviews(pr_number, repo);
 CREATE INDEX IF NOT EXISTS idx_comment_categories_domain ON comment_categories(domain_id);
 CREATE INDEX IF NOT EXISTS idx_comment_categories_severity ON comment_categories(severity);
 CREATE INDEX IF NOT EXISTS idx_comment_categories_component ON comment_categories(component);

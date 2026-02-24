@@ -159,16 +159,18 @@ def review_diff(
 @mcp.tool()
 def review_pr(
     pr_number: int,
+    repo: str = "micropython/micropython",
     top_k: int = 8,
     include_codebase: bool = False,
 ) -> str:
     """Review a GitHub PR by number using historical MicroPython review patterns.
 
-    Fetches the PR diff from micropython/micropython via gh CLI, then
-    retrieves relevant past review examples and writes them to temp files.
+    Fetches the PR diff via gh CLI, then retrieves relevant past review
+    examples and writes them to temp files.
 
     Args:
-        pr_number: GitHub PR number from micropython/micropython.
+        pr_number: GitHub PR number.
+        repo: GitHub repository slug (default: micropython/micropython).
         top_k: Number of review examples to retrieve (default 8).
         include_codebase: Include MicroPython codebase context (slower).
 
@@ -180,7 +182,7 @@ def review_pr(
                 pr_number, top_k, include_codebase)
 
     result = subprocess.run(
-        ["gh", "pr", "diff", str(pr_number), "--repo", "micropython/micropython"],
+        ["gh", "pr", "diff", str(pr_number), "--repo", repo],
         capture_output=True,
         text=True,
     )
@@ -347,6 +349,7 @@ def get_review_stats() -> dict:
 @mcp.tool()
 def get_pr_review_history(
     pr_number: int,
+    repo: str = "micropython/micropython",
     max_comments: int = 20,
 ) -> dict:
     """Get full review history for a specific PR.
@@ -356,13 +359,14 @@ def get_pr_review_history(
 
     Args:
         pr_number: GitHub PR number.
+        repo: GitHub repository slug (default: micropython/micropython).
         max_comments: Maximum comments to return (default 20).
 
     Returns:
         Dict with 'threads' (grouped by reply chain), 'pr_info', and 'comment_count'.
     """
     from rag.graph_expander import get_pr_review_context
-    return get_pr_review_context(pr_number, max_comments=max_comments)
+    return get_pr_review_context(pr_number, max_comments=max_comments, repo=repo)
 
 
 if __name__ == "__main__":

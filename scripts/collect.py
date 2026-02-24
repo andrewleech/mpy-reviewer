@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Collect dpgeorge's PR review comments from micropython/micropython.
+Collect dpgeorge's PR review comments from a MicroPython repository.
 
 Uses the GitHub CLI (gh) for authentication and API access.
 Supports resume from checkpoint and incremental updates.
 """
 
+import argparse
 import json
 import sqlite3
 import subprocess
@@ -15,7 +16,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-REPO = "micropython/micropython"
 REVIEWER = "dpgeorge"
 DB_PATH = Path(__file__).parent.parent / "data" / "reviews.db"
 SCHEMA_PATH = Path(__file__).parent.parent / "schema.sql"
@@ -92,9 +92,9 @@ def set_sync_state(conn, key, value):
     conn.commit()
 
 
-def get_collected_pr_numbers(conn):
-    """Get set of PR numbers already collected."""
-    cursor = conn.execute("SELECT number FROM prs")
+def get_collected_pr_numbers(conn, repo):
+    """Get set of PR numbers already collected for this repo."""
+    cursor = conn.execute("SELECT number FROM prs WHERE repo = ?", (repo,))
     return {row[0] for row in cursor.fetchall()}
 
 
@@ -138,12 +138,12 @@ def search_prs_in_range(base_query, date_range=None):
     return prs
 
 
-def search_prs_with_comments(since=None):
+def search_prs_with_comments(repo, since=None):
     """Search for PRs that dpgeorge has commented on.
 
     Uses date ranges to work around GitHub's 1000 result limit.
     """
-    base_query = f"repo:{REPO} is:pr commenter:{REVIEWER}"
+    base_query = f"repo:{repo} is:pr commenter:{REVIEWER}"
 
     if since:
         # Incremental sync - single query should be under 1000 results
@@ -166,46 +166,47 @@ def search_prs_with_comments(since=None):
     return list(all_prs)
 
 
-def fetch_pr_details(pr_number):
+def fetch_pr_details(repo, pr_number):
     """Fetch full PR details."""
-    endpoint = f"repos/{REPO}/pulls/{pr_number}"
+    endpoint = f"repos/{repo}/pulls/{pr_number}"
     return gh_api(endpoint)
 
 
-def fetch_review_comments(pr_number):
+def fetch_review_comments(repo, pr_number):
     """Fetch review comments (inline code comments) for a PR."""
-    endpoint = f"repos/{REPO}/pulls/{pr_number}/comments"
+    endpoint = f"repos/{repo}/pulls/{pr_number}/comments"
     comments = gh_api(endpoint, paginate=True) or []
     # Filter to dpgeorge's comments
     return [c for c in comments if c.get("user", {}).get("login") == REVIEWER]
 
 
-def fetch_issue_comments(pr_number):
+def fetch_issue_comments(repo, pr_number):
     """Fetch issue comments (general discussion) for a PR."""
-    endpoint = f"repos/{REPO}/issues/{pr_number}/comments"
+    endpoint = f"repos/{repo}/issues/{pr_number}/comments"
     comments = gh_api(endpoint, paginate=True) or []
     # Filter to dpgeorge's comments
     return [c for c in comments if c.get("user", {}).get("login") == REVIEWER]
 
 
-def fetch_reviews(pr_number):
+def fetch_reviews(repo, pr_number):
     """Fetch reviews (APPROVED/CHANGES_REQUESTED) for a PR."""
-    endpoint = f"repos/{REPO}/pulls/{pr_number}/reviews"
+    endpoint = f"repos/{repo}/pulls/{pr_number}/reviews"
     reviews = gh_api(endpoint, paginate=True) or []
     # Filter to dpgeorge's reviews
     return [r for r in reviews if r.get("user", {}).get("login") == REVIEWER]
 
 
-def store_pr(conn, pr):
+def store_pr(conn, repo, pr):
     """Store PR details in database."""
     conn.execute("""
         INSERT OR REPLACE INTO prs
-        (id, number, title, body, author, state, created_at, merged_at, closed_at,
+        (id, number, repo, title, body, author, state, created_at, merged_at, closed_at,
          changed_files, commits, additions, deletions, base_branch)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         pr["id"],
         pr["number"],
+        repo,
         pr["title"],
         pr["body"],
         pr["user"]["login"],
@@ -221,17 +222,18 @@ def store_pr(conn, pr):
     ))
 
 
-def store_review_comments(conn, pr_number, comments):
+def store_review_comments(conn, repo, pr_number, comments):
     """Store review comments in database."""
     for c in comments:
         conn.execute("""
             INSERT OR REPLACE INTO review_comments
-            (id, pr_number, body, path, line, original_line, diff_hunk,
+            (id, pr_number, repo, body, path, line, original_line, diff_hunk,
              created_at, updated_at, in_reply_to_id, commit_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             c["id"],
             pr_number,
+            repo,
             c["body"],
             c.get("path"),
             c.get("line"),
@@ -244,32 +246,34 @@ def store_review_comments(conn, pr_number, comments):
         ))
 
 
-def store_issue_comments(conn, pr_number, comments):
+def store_issue_comments(conn, repo, pr_number, comments):
     """Store issue comments in database."""
     for c in comments:
         conn.execute("""
             INSERT OR REPLACE INTO issue_comments
-            (id, pr_number, body, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            (id, pr_number, repo, body, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
         """, (
             c["id"],
             pr_number,
+            repo,
             c["body"],
             c["created_at"],
             c.get("updated_at"),
         ))
 
 
-def store_reviews(conn, pr_number, reviews):
+def store_reviews(conn, repo, pr_number, reviews):
     """Store reviews in database."""
     for r in reviews:
         conn.execute("""
             INSERT OR REPLACE INTO reviews
-            (id, pr_number, state, body, created_at, commit_id)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (id, pr_number, repo, state, body, created_at, commit_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             r["id"],
             pr_number,
+            repo,
             r["state"],
             r.get("body"),
             r["submitted_at"],
@@ -277,10 +281,10 @@ def store_reviews(conn, pr_number, reviews):
         ))
 
 
-def collect_pr(conn, pr_number):
+def collect_pr(conn, repo, pr_number):
     """Collect all data for a single PR."""
     # Fetch PR details
-    pr = fetch_pr_details(pr_number)
+    pr = fetch_pr_details(repo, pr_number)
     if pr is None:
         print(f"    Failed to fetch PR #{pr_number}", file=sys.stderr)
         return False
@@ -288,42 +292,57 @@ def collect_pr(conn, pr_number):
     time.sleep(REQUEST_DELAY)
 
     # Fetch comments
-    review_comments = fetch_review_comments(pr_number)
+    review_comments = fetch_review_comments(repo, pr_number)
     time.sleep(REQUEST_DELAY)
 
-    issue_comments = fetch_issue_comments(pr_number)
+    issue_comments = fetch_issue_comments(repo, pr_number)
     time.sleep(REQUEST_DELAY)
 
-    reviews = fetch_reviews(pr_number)
+    reviews = fetch_reviews(repo, pr_number)
     time.sleep(REQUEST_DELAY)
 
     # Store everything
-    store_pr(conn, pr)
-    store_review_comments(conn, pr_number, review_comments)
-    store_issue_comments(conn, pr_number, issue_comments)
-    store_reviews(conn, pr_number, reviews)
+    store_pr(conn, repo, pr)
+    store_review_comments(conn, repo, pr_number, review_comments)
+    store_issue_comments(conn, repo, pr_number, issue_comments)
+    store_reviews(conn, repo, pr_number, reviews)
     conn.commit()
 
     return True
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Collect dpgeorge's PR review comments from a GitHub repository."
+    )
+    parser.add_argument(
+        "--repo",
+        default="micropython/micropython",
+        help="GitHub repository (default: micropython/micropython)",
+    )
+    args = parser.parse_args()
+    repo = args.repo
+
     print(f"Initializing database at {DB_PATH}")
     conn = init_db()
 
+    # Repo-scoped sync state keys
+    sync_key = f"last_sync:{repo}"
+    checkpoint_key = f"checkpoint_pr:{repo}"
+
     # Check for incremental mode
-    last_sync = get_sync_state(conn, "last_sync")
-    collected_prs = get_collected_pr_numbers(conn)
+    last_sync = get_sync_state(conn, sync_key)
+    collected_prs = get_collected_pr_numbers(conn, repo)
 
     if last_sync:
-        print(f"Incremental sync from {last_sync}")
-        print(f"Already have {len(collected_prs)} PRs in database")
+        print(f"Incremental sync for {repo} from {last_sync}")
+        print(f"Already have {len(collected_prs)} PRs in database for {repo}")
     else:
-        print("Full collection (no previous sync)")
+        print(f"Full collection for {repo} (no previous sync)")
 
     # Find PRs to collect
-    print(f"\nSearching for PRs commented by {REVIEWER}...")
-    pr_numbers = search_prs_with_comments(since=last_sync)
+    print(f"\nSearching for PRs commented by {REVIEWER} on {repo}...")
+    pr_numbers = search_prs_with_comments(repo, since=last_sync)
     print(f"Found {len(pr_numbers)} PRs total")
 
     # Filter out already collected (for full sync)
@@ -345,36 +364,36 @@ def main():
 
         print(f"[{i+1}/{len(pr_numbers)}] PR #{pr_number} ({rate:.0f} PRs/hour)")
 
-        success = collect_pr(conn, pr_number)
+        success = collect_pr(conn, repo, pr_number)
         if not success:
             print(f"  Skipping PR #{pr_number}")
             continue
 
         # Update checkpoint periodically
         if (i + 1) % 10 == 0:
-            set_sync_state(conn, "checkpoint_pr", str(pr_number))
+            set_sync_state(conn, checkpoint_key, str(pr_number))
 
     # Update sync timestamp
-    set_sync_state(conn, "last_sync", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    set_sync_state(conn, sync_key, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
 
     # Print summary
-    cursor = conn.execute("SELECT COUNT(*) FROM prs")
-    total_prs = cursor.fetchone()[0]
+    cursor = conn.execute("SELECT repo, COUNT(*) FROM prs GROUP BY repo")
+    print(f"\nCollection complete!")
+    for row in cursor:
+        print(f"  PRs ({row[0]}): {row[1]}")
 
-    cursor = conn.execute("SELECT COUNT(*) FROM review_comments")
+    cursor = conn.execute("SELECT COUNT(*) FROM review_comments WHERE repo = ?", (repo,))
     total_review_comments = cursor.fetchone()[0]
 
-    cursor = conn.execute("SELECT COUNT(*) FROM issue_comments")
+    cursor = conn.execute("SELECT COUNT(*) FROM issue_comments WHERE repo = ?", (repo,))
     total_issue_comments = cursor.fetchone()[0]
 
-    cursor = conn.execute("SELECT COUNT(*) FROM reviews")
+    cursor = conn.execute("SELECT COUNT(*) FROM reviews WHERE repo = ?", (repo,))
     total_reviews = cursor.fetchone()[0]
 
-    print(f"\nCollection complete!")
-    print(f"  PRs: {total_prs}")
-    print(f"  Review comments: {total_review_comments}")
-    print(f"  Issue comments: {total_issue_comments}")
-    print(f"  Reviews: {total_reviews}")
+    print(f"  Review comments ({repo}): {total_review_comments}")
+    print(f"  Issue comments ({repo}): {total_issue_comments}")
+    print(f"  Reviews ({repo}): {total_reviews}")
 
     conn.close()
 

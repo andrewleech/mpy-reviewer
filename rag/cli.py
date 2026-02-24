@@ -153,6 +153,7 @@ def search(
 
 @cli.command()
 @click.option("--pr", "pr_number", type=int, help="PR number to review")
+@click.option("--repo", default="micropython/micropython", help="GitHub repository slug")
 @click.option("--diff", "diff_file", type=click.Path(exists=True), help="Diff file to review")
 @click.option("--stdin", "use_stdin", is_flag=True, help="Read diff from stdin")
 @click.option("-k", "--top-k", default=8, help="Number of examples to retrieve")
@@ -163,6 +164,7 @@ def search(
 def review(
     ctx,
     pr_number: Optional[int],
+    repo: str,
     diff_file: Optional[str],
     use_stdin: bool,
     top_k: int,
@@ -184,6 +186,7 @@ def review(
     with logger.track_operation(
         "review",
         pr_number=pr_number,
+        repo=repo,
         diff_file=diff_file,
         use_stdin=use_stdin,
         top_k=top_k,
@@ -193,7 +196,7 @@ def review(
     ) as log_ctx:
         # Get diff content
         if pr_number:
-            diff_text = _fetch_pr_diff(pr_number)
+            diff_text = _fetch_pr_diff(pr_number, repo=repo)
         elif diff_file:
             diff_text = Path(diff_file).read_text()
         elif use_stdin:
@@ -272,12 +275,12 @@ def review(
                 click.echo("---\n")
 
 
-def _fetch_pr_diff(pr_number: int) -> str:
+def _fetch_pr_diff(pr_number: int, repo: str = "micropython/micropython") -> str:
     """Fetch diff for a PR from GitHub."""
     import subprocess
 
     result = subprocess.run(
-        ["gh", "pr", "diff", str(pr_number), "--repo", "micropython/micropython"],
+        ["gh", "pr", "diff", str(pr_number), "--repo", repo],
         capture_output=True,
         text=True,
     )

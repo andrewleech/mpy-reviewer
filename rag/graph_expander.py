@@ -106,6 +106,7 @@ def expand_pr_context(
     conn: Optional[sqlite3.Connection] = None,
     max_siblings: int = 5,
     min_severity: str = "suggestion",
+    repo: str = "micropython/micropython",
 ) -> List[Dict[str, Any]]:
     """Get other review comments from the same PR.
 
@@ -117,6 +118,7 @@ def expand_pr_context(
         conn: Optional database connection.
         max_siblings: Maximum sibling comments to return.
         min_severity: Minimum severity to include ("blocking" or "suggestion").
+        repo: GitHub repository slug.
 
     Returns:
         List of sibling comments with categorization metadata.
@@ -136,13 +138,14 @@ def expand_pr_context(
                     ON rc.id = cc.comment_id AND cc.comment_type = 'review_comment'
                 LEFT JOIN domains d ON cc.domain_id = d.id
                 WHERE rc.pr_number = ?
+                  AND rc.repo = ?
                   AND cc.severity IN {severity_filter}
                   AND cc.theme != 'FAILED_CATEGORIZATION'
                 ORDER BY
                     CASE cc.severity WHEN 'blocking' THEN 0 ELSE 1 END,
                     rc.created_at
                 LIMIT ?""",
-            (pr_number, max_siblings),
+            (pr_number, repo, max_siblings),
         ).fetchall()
 
         return [dict(r) for r in rows]
@@ -156,6 +159,7 @@ def get_file_review_summary(
     file_path: str,
     conn: Optional[sqlite3.Connection] = None,
     max_prs: int = 20,
+    repo: str = "micropython/micropython",
 ) -> Dict[str, Any]:
     """Aggregate review themes for a specific file across all PRs.
 
@@ -165,6 +169,7 @@ def get_file_review_summary(
         file_path: File path (as stored in review_comments.path).
         conn: Optional database connection.
         max_prs: Maximum number of PRs to aggregate across.
+        repo: GitHub repository slug.
 
     Returns:
         Dict with theme_counts, severity_counts, domain_counts, sample_comments,
@@ -183,13 +188,15 @@ def get_file_review_summary(
                    ON rc.id = cc.comment_id AND cc.comment_type = 'review_comment'
                LEFT JOIN domains d ON cc.domain_id = d.id
                WHERE rc.path = ?
+                 AND rc.repo = ?
                  AND cc.theme != 'FAILED_CATEGORIZATION'
                  AND rc.pr_number IN (
                      SELECT DISTINCT pr_number FROM review_comments
-                     WHERE path = ? ORDER BY pr_number DESC LIMIT ?
+                     WHERE path = ? AND repo = ?
+                     ORDER BY pr_number DESC LIMIT ?
                  )
                ORDER BY rc.created_at DESC""",
-            (file_path, file_path, max_prs),
+            (file_path, repo, file_path, repo, max_prs),
         ).fetchall()
 
         if not rows:
@@ -247,6 +254,7 @@ def get_pr_review_context(
     pr_number: int,
     max_comments: int = 20,
     conn: Optional[sqlite3.Connection] = None,
+    repo: str = "micropython/micropython",
 ) -> Dict[str, Any]:
     """Get full review history for a PR, organized as threads.
 
@@ -256,6 +264,7 @@ def get_pr_review_context(
         pr_number: GitHub PR number.
         max_comments: Maximum total comments to return.
         conn: Optional database connection.
+        repo: GitHub repository slug.
 
     Returns:
         Dict with 'pr_info', 'threads' (grouped conversations), 'standalone'
@@ -268,8 +277,8 @@ def get_pr_review_context(
     try:
         # PR metadata
         pr_row = conn.execute(
-            "SELECT number, title, author, state, created_at, merged_at FROM prs WHERE number = ?",
-            (pr_number,),
+            "SELECT number, title, author, state, created_at, merged_at FROM prs WHERE number = ? AND repo = ?",
+            (pr_number, repo),
         ).fetchone()
 
         pr_info = dict(pr_row) if pr_row else {"number": pr_number}
@@ -278,9 +287,9 @@ def get_pr_review_context(
         review_comments = conn.execute(
             """SELECT id, body, path, line, diff_hunk, created_at, in_reply_to_id
                FROM review_comments
-               WHERE pr_number = ?
+               WHERE pr_number = ? AND repo = ?
                ORDER BY created_at""",
-            (pr_number,),
+            (pr_number, repo),
         ).fetchall()
         review_comments = [dict(r) for r in review_comments]
 
@@ -288,9 +297,9 @@ def get_pr_review_context(
         issue_comments = conn.execute(
             """SELECT id, body, created_at
                FROM issue_comments
-               WHERE pr_number = ?
+               WHERE pr_number = ? AND repo = ?
                ORDER BY created_at""",
-            (pr_number,),
+            (pr_number, repo),
         ).fetchall()
         issue_comments = [dict(r) for r in issue_comments]
 
@@ -298,9 +307,9 @@ def get_pr_review_context(
         verdicts = conn.execute(
             """SELECT id, state, body, created_at
                FROM reviews
-               WHERE pr_number = ? AND body IS NOT NULL AND body != ''
+               WHERE pr_number = ? AND repo = ? AND body IS NOT NULL AND body != ''
                ORDER BY created_at""",
-            (pr_number,),
+            (pr_number, repo),
         ).fetchall()
         verdicts = [dict(r) for r in verdicts]
 
