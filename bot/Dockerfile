@@ -1,5 +1,8 @@
 # Stage 1: Build codanna from Rust
 FROM rust:1.88-slim AS codanna-builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev perl make && \
+    rm -rf /var/lib/apt/lists/*
 RUN cargo install codanna --all-features
 
 # Stage 2: Node.js (for Claude CLI)
