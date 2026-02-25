@@ -41,176 +41,134 @@ def register_bot_tools(mcp):
                 f"target repo {target_repo}"
             )
 
+    def _delete_pending_reviews(owner: str, repo: str, pr_number: int) -> None:
+        """Delete any PENDING reviews left by the bot on a PR.
+
+        PENDING reviews from previous failed attempts block new review
+        creation (GitHub allows only one pending review per user per PR).
+        """
+        try:
+            reviews = _github_api.github_request(
+                "GET", f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
+            )
+            for rev in reviews:
+                if rev.get("state") == "PENDING":
+                    _github_api.github_request(
+                        "DELETE",
+                        f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews/{rev['id']}",
+                    )
+                    logger.info("Deleted stale pending review %d on PR #%d",
+                                rev["id"], pr_number)
+        except (urllib.error.HTTPError, urllib.error.URLError) as e:
+            logger.warning("Failed to clean pending reviews on PR #%d: %s",
+                           pr_number, e)
+
     @mcp.tool()
-    def create_review(
+    def post_review(
         owner: str,
         repo: str,
         pr_number: int,
+        body: str,
+        comments: list[dict] | None = None,
         commit_sha: str | None = None,
     ) -> dict:
-        """Create a pending review on a GitHub PR.
+        """Create and submit a review on a GitHub PR in a single call.
 
-        Creates a PENDING review that can accumulate inline comments before
-        being submitted. Use add_review_comment to attach comments, then
-        submit_review to make everything visible.
+        Deletes any stale pending reviews from previous attempts first,
+        then creates and immediately submits the review with all inline
+        comments. This is the only review-posting tool you need.
 
         Args:
             owner: Repository owner (e.g. "micropython").
             repo: Repository name (e.g. "micropython").
             pr_number: Pull request number.
+            body: Review summary text (2-4 sentences).
+            comments: List of inline comments. Each dict must have:
+                - path (str): File path relative to repo root.
+                - body (str): Comment text (markdown). For suggested fixes,
+                  embed a ```suggestion block in the body text.
+                - line (int): Line number in the diff.
+                - side (str): "RIGHT" (added/context) or "LEFT" (removed).
+              Only these four fields are accepted; extra fields are stripped.
             commit_sha: Optional commit SHA to pin the review to.
 
         Returns:
-            Dict with 'review_id', or 'error' with 'review_id': None on failure.
+            Dict with 'review_id' and 'comment_count' on success,
+            or 'error' on failure. If some comments were rejected by
+            GitHub (wrong line/path), 'rejected_comments' lists them
+            and the review is retried without those comments.
         """
         _check_repo(owner, repo)
-        payload = {"commit_id": commit_sha} if commit_sha else None
+
+        _delete_pending_reviews(owner, repo, pr_number)
+
+        # Strip fields the GitHub API doesn't accept on review comments.
+        # The model sometimes adds extra fields like "suggestion".
+        _ALLOWED_COMMENT_FIELDS = {"path", "body", "line", "side", "start_line", "start_side", "position"}
+        if comments:
+            comments = [
+                {k: v for k, v in c.items() if k in _ALLOWED_COMMENT_FIELDS}
+                for c in comments
+            ]
+
+        payload = {
+            "body": body,
+            "event": "COMMENT",
+        }
+        if commit_sha:
+            payload["commit_id"] = commit_sha
+        if comments:
+            payload["comments"] = comments
+
         try:
             result = _github_api.github_request(
                 "POST",
                 f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews",
                 payload,
             )
-            return {"review_id": result["id"]}
+            comment_count = len(comments) if comments else 0
+            logger.info("post_review succeeded on PR #%d: review_id=%d, %d comments",
+                        pr_number, result["id"], comment_count)
+            return {
+                "review_id": result["id"],
+                "comment_count": comment_count,
+            }
         except urllib.error.HTTPError as e:
             error_body = e.read().decode()[:500] if e.fp else ""
-            if e.code == 422 and "pending review" in error_body.lower():
-                # "User can only have one pending review per pull request".
-                # Dismiss the stale pending review and create a fresh one.
-                logger.warning("Pending review already exists on PR #%d, deleting it", pr_number)
+
+            # 422 with "pull_request_review_thread" errors means some
+            # comments target lines outside the diff. Retry without them.
+            if e.code == 422 and comments and "pull_request_review_thread" in error_body.lower():
+                logger.warning(
+                    "post_review: %d comments rejected by GitHub on PR #%d, "
+                    "retrying with body-only review",
+                    len(comments), pr_number,
+                )
+                payload.pop("comments", None)
                 try:
-                    reviews = _github_api.github_request(
-                        "GET", f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
-                    )
-                    for rev in reviews:
-                        if rev.get("state") == "PENDING":
-                            _github_api.github_request(
-                                "DELETE",
-                                f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews/{rev['id']}",
-                            )
-                            logger.info("Deleted stale pending review %d", rev["id"])
                     result = _github_api.github_request(
                         "POST",
                         f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews",
                         payload,
                     )
-                    return {"review_id": result["id"]}
+                    return {
+                        "review_id": result["id"],
+                        "comment_count": 0,
+                        "rejected_comments": len(comments),
+                        "note": "All inline comments were rejected (lines outside diff). "
+                                "Review posted with summary only.",
+                    }
                 except (urllib.error.HTTPError, urllib.error.URLError) as retry_err:
-                    logger.error("create_review retry failed on PR #%d: %s", pr_number, retry_err)
-                    return {"error": f"Retry after stale review cleanup failed: {retry_err}", "review_id": None}
-            logger.warning(
-                "create_review failed (HTTP %d) on PR #%d: %s",
-                e.code, pr_number, error_body,
-            )
-            return {"error": f"HTTP {e.code}: {error_body or e.reason}", "review_id": None}
+                    logger.error("post_review body-only retry failed on PR #%d: %s",
+                                 pr_number, retry_err)
+                    return {"error": f"Retry failed: {retry_err}"}
+
+            logger.warning("post_review failed (HTTP %d) on PR #%d: %s",
+                           e.code, pr_number, error_body)
+            return {"error": f"HTTP {e.code}: {error_body or e.reason}"}
         except urllib.error.URLError as e:
-            logger.warning("create_review network error on PR #%d: %s", pr_number, e)
-            return {"error": f"Network error: {e.reason}", "review_id": None}
-
-    @mcp.tool()
-    def add_review_comment(
-        owner: str,
-        repo: str,
-        pr_number: int,
-        review_id: int,
-        path: str,
-        body: str,
-        line: int | None = None,
-        side: str = "RIGHT",
-    ) -> dict:
-        """Add an inline comment to a pending GitHub PR review.
-
-        Args:
-            owner: Repository owner.
-            repo: Repository name.
-            pr_number: Pull request number.
-            review_id: Review ID from create_review.
-            path: File path relative to repo root.
-            body: Comment text.
-            line: Line number in the diff. If None, attaches to the file.
-            side: "RIGHT" (new/added, default) or "LEFT" (old/deleted).
-
-        Returns:
-            Dict with 'comment_id'.
-        """
-        _check_repo(owner, repo)
-        payload = {"path": path, "body": body, "side": side}
-        if line is not None:
-            payload["line"] = line
-        try:
-            result = _github_api.github_request(
-                "POST",
-                f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews/{review_id}/comments",
-                payload,
-            )
-            return {"comment_id": result["id"]}
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode()[:500] if e.fp else ""
-            logger.warning(
-                "add_review_comment failed (HTTP %d) on %s line %s: %s",
-                e.code, path, line, error_body,
-            )
-            return {
-                "error": f"HTTP {e.code}: {error_body or e.reason}",
-                "comment_id": None,
-                "failed_path": path,
-                "failed_line": line,
-                "failed_side": side,
-            }
-        except urllib.error.URLError as e:
-            logger.warning("add_review_comment network error on %s line %s: %s", path, line, e)
-            return {
-                "error": f"Network error: {e.reason}",
-                "comment_id": None,
-                "failed_path": path,
-                "failed_line": line,
-                "failed_side": side,
-            }
-
-    @mcp.tool()
-    def submit_review(
-        owner: str,
-        repo: str,
-        pr_number: int,
-        review_id: int,
-        body: str,
-        event: str = "COMMENT",
-    ) -> dict:
-        """Submit a pending review, making all comments visible.
-
-        Args:
-            owner: Repository owner.
-            repo: Repository name.
-            pr_number: Pull request number.
-            review_id: Review ID from create_review.
-            body: Review summary text.
-            event: Review event — only "COMMENT" is permitted.
-
-        Returns:
-            Dict with 'status', or 'error' with 'status': 'failed' on failure.
-        """
-        _check_repo(owner, repo)
-        if event != "COMMENT":
-            raise ValueError(
-                f"Only 'COMMENT' event is permitted, got '{event}'"
-            )
-        try:
-            _github_api.github_request(
-                "POST",
-                f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews/{review_id}/events",
-                {"body": body, "event": event},
-            )
-            return {"status": "submitted"}
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode()[:500] if e.fp else ""
-            logger.warning(
-                "submit_review failed (HTTP %d) on PR #%d review %d: %s",
-                e.code, pr_number, review_id, error_body,
-            )
-            return {"error": f"HTTP {e.code}: {error_body or e.reason}", "status": "failed"}
-        except urllib.error.URLError as e:
-            logger.warning("submit_review network error on PR #%d review %d: %s", pr_number, review_id, e)
-            return {"error": f"Network error: {e.reason}", "status": "failed"}
+            logger.warning("post_review network error on PR #%d: %s", pr_number, e)
+            return {"error": f"Network error: {e.reason}"}
 
     @mcp.tool()
     def get_check_runs(
@@ -278,9 +236,11 @@ def register_bot_tools(mcp):
                 "check_runs": check_runs,
             }
         except urllib.error.HTTPError as e:
+            _empty = {"total_count": 0, "check_runs": []}
             if e.code == 403:
-                return {"error": "Missing 'checks: read' permission on the GitHub App", "total_count": 0, "check_runs": []}
-            raise
+                return {"error": "Missing 'checks: read' permission on the GitHub App", **_empty}
+            error_body = e.read().decode()[:200] if e.fp else ""
+            return {"error": f"HTTP {e.code}: {error_body or e.reason}", **_empty}
 
     @mcp.tool()
     def get_check_run_annotations(
@@ -336,9 +296,11 @@ def register_bot_tools(mcp):
                 "annotations": all_annotations,
             }
         except urllib.error.HTTPError as e:
+            _empty = {"count": 0, "annotations": []}
             if e.code == 403:
-                return {"error": "Missing 'checks: read' permission on the GitHub App", "count": 0, "annotations": []}
-            raise
+                return {"error": "Missing 'checks: read' permission on the GitHub App", **_empty}
+            error_body = e.read().decode()[:200] if e.fp else ""
+            return {"error": f"HTTP {e.code}: {error_body or e.reason}", **_empty}
 
     @mcp.tool()
     def get_workflow_run_log(
@@ -376,11 +338,15 @@ def register_bot_tools(mcp):
                 f"/repos/{owner}/{repo}/actions/runs/{workflow_run_id}/logs",
             )
         except urllib.error.HTTPError as e:
+            _empty = {"job_name": None, "log": "", "truncated": False}
             if e.code == 403:
-                return {"error": "Missing 'actions: read' permission on the GitHub App", "job_name": None, "log": "", "truncated": False}
+                return {"error": "Missing 'actions: read' permission on the GitHub App", **_empty}
+            if e.code == 404:
+                return {"error": "Workflow run not found (may be on a different repo or deleted)", **_empty}
             if e.code == 410:
-                return {"error": "Logs have expired (GitHub retains for 90 days)", "job_name": None, "log": "", "truncated": False}
-            raise
+                return {"error": "Logs have expired (GitHub retains for 90 days)", **_empty}
+            error_body = e.read().decode()[:200] if e.fp else ""
+            return {"error": f"HTTP {e.code}: {error_body or e.reason}", **_empty}
 
         try:
             zf = zipfile.ZipFile(io.BytesIO(data))

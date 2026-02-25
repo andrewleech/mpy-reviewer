@@ -103,6 +103,13 @@ class TestGetCheckRuns:
         assert "error" in result
         assert result["total_count"] == 0
 
+    def test_unexpected_http_error_returns_error(self, ci_tools):
+        err = urllib.error.HTTPError("", 502, "Bad Gateway", None, BytesIO(b"upstream error"))
+        with patch("bot.github_api.github_request", side_effect=err):
+            result = ci_tools["get_check_runs"]("micropython", "micropython", "abc")
+        assert "502" in result["error"]
+        assert result["total_count"] == 0
+
     def test_repo_check(self, ci_tools):
         with pytest.raises(ValueError, match="does not match"):
             ci_tools["get_check_runs"]("evil", "repo", "abc")
@@ -226,6 +233,13 @@ class TestGetWorkflowRunLog:
             result = ci_tools["get_workflow_run_log"]("micropython", "micropython", 42)
         assert "expired" in result["error"].lower()
 
+    def test_404_returns_error(self, ci_tools):
+        err = urllib.error.HTTPError("", 404, "Not Found", None, BytesIO(b""))
+        with patch("bot.github_api.github_request_binary", side_effect=err):
+            result = ci_tools["get_workflow_run_log"]("micropython", "micropython", 42)
+        assert "error" in result
+        assert "not found" in result["error"].lower()
+
     def test_bad_zip(self, ci_tools):
         with patch("bot.github_api.github_request_binary", return_value=b"not a zip"):
             result = ci_tools["get_workflow_run_log"]("micropython", "micropython", 42)
@@ -233,147 +247,134 @@ class TestGetWorkflowRunLog:
         assert "ZIP" in result["error"]
 
 
-# --- create_review error handling ---
+# --- post_review ---
 
-class TestCreateReviewErrors:
-    def test_success(self, ci_tools):
-        with patch("bot.github_api.github_request", return_value={"id": 42}):
-            result = ci_tools["create_review"]("micropython", "micropython", 1)
-        assert result == {"review_id": 42}
+class TestPostReview:
+    def test_success_with_comments(self, ci_tools):
+        """post_review creates and submits review with inline comments."""
+        comments = [
+            {"path": "py/gc.c", "body": "Missing null check.", "line": 42, "side": "RIGHT"},
+        ]
+        # First call: GET reviews (cleanup), second: POST review
+        def mock_request(method, url, payload=None, **kwargs):
+            if method == "GET":
+                return []  # no pending reviews
+            return {"id": 99}
 
-    def test_404_returns_error(self, ci_tools):
-        err = urllib.error.HTTPError("", 404, "Not Found", None, BytesIO(b"PR not found"))
-        with patch("bot.github_api.github_request", side_effect=err):
-            result = ci_tools["create_review"]("micropython", "micropython", 999)
-        assert "error" in result
-        assert result["review_id"] is None
-        assert "404" in result["error"]
+        with patch("bot.github_api.github_request", side_effect=mock_request):
+            result = ci_tools["post_review"](
+                "micropython", "micropython", 1, "summary", comments,
+            )
+        assert result["review_id"] == 99
+        assert result["comment_count"] == 1
 
-    def test_500_returns_error(self, ci_tools):
-        err = urllib.error.HTTPError("", 500, "Server Error", None, BytesIO(b""))
-        with patch("bot.github_api.github_request", side_effect=err):
-            result = ci_tools["create_review"]("micropython", "micropython", 1)
-        assert "error" in result
-        assert result["review_id"] is None
+    def test_strips_unknown_comment_fields(self, ci_tools):
+        """post_review strips fields like 'suggestion' that GitHub rejects."""
+        comments = [
+            {"path": "py/gc.c", "body": "fix this", "line": 42, "side": "RIGHT",
+             "suggestion": "fixed_code()", "confidence": "high"},
+        ]
+        sent_payload = {}
+        def mock_request(method, url, payload=None, **kwargs):
+            if method == "GET":
+                return []
+            sent_payload.update(payload)
+            return {"id": 88}
 
-    def test_network_error_returns_error(self, ci_tools):
-        err = urllib.error.URLError("Connection refused")
-        with patch("bot.github_api.github_request", side_effect=err):
-            result = ci_tools["create_review"]("micropython", "micropython", 1)
-        assert "error" in result
-        assert "Network error" in result["error"]
-        assert result["review_id"] is None
+        with patch("bot.github_api.github_request", side_effect=mock_request):
+            result = ci_tools["post_review"](
+                "micropython", "micropython", 1, "summary", comments,
+            )
+        assert result["review_id"] == 88
+        sent_comment = sent_payload["comments"][0]
+        assert set(sent_comment.keys()) == {"path", "body", "line", "side"}
+        assert "suggestion" not in sent_comment
+        assert "confidence" not in sent_comment
 
-    def test_422_pending_review_recovery(self, ci_tools):
-        """422 with 'pending review' triggers cleanup and retry."""
-        err = urllib.error.HTTPError("", 422, "Unprocessable", None,
-                                     BytesIO(b"User can only have one pending review"))
-        reviews_list = [{"id": 10, "state": "PENDING"}]
-        retry_result = {"id": 99}
+    def test_success_body_only(self, ci_tools):
+        """post_review works with no inline comments."""
+        def mock_request(method, url, payload=None, **kwargs):
+            if method == "GET":
+                return []
+            return {"id": 50}
 
+        with patch("bot.github_api.github_request", side_effect=mock_request):
+            result = ci_tools["post_review"](
+                "micropython", "micropython", 1, "looks good",
+            )
+        assert result["review_id"] == 50
+        assert result["comment_count"] == 0
+
+    def test_deletes_stale_pending_reviews(self, ci_tools):
+        """post_review cleans up stale PENDING reviews before posting."""
+        calls = []
+        def mock_request(method, url, payload=None, **kwargs):
+            calls.append((method, url))
+            if method == "GET":
+                return [{"id": 10, "state": "PENDING"}, {"id": 20, "state": "COMMENTED"}]
+            if method == "DELETE":
+                return None
+            return {"id": 99}
+
+        with patch("bot.github_api.github_request", side_effect=mock_request):
+            result = ci_tools["post_review"](
+                "micropython", "micropython", 1, "summary",
+            )
+        assert result["review_id"] == 99
+        # Should have GET (list reviews), DELETE (pending review 10), POST (new review)
+        delete_calls = [(m, u) for m, u in calls if m == "DELETE"]
+        assert len(delete_calls) == 1
+        assert "10" in delete_calls[0][1]
+
+    def test_422_thread_error_retries_body_only(self, ci_tools):
+        """422 with pull_request_review_thread retries without comments."""
+        comments = [{"path": "f.c", "body": "x", "line": 999, "side": "RIGHT"}]
         call_count = 0
         def mock_request(method, url, payload=None, **kwargs):
             nonlocal call_count
+            if method == "GET":
+                return []
             call_count += 1
             if call_count == 1:
-                raise err
-            if method == "GET":
-                return reviews_list
-            if method == "DELETE":
-                return None
-            return retry_result
+                raise urllib.error.HTTPError(
+                    "", 422, "Unprocessable", None,
+                    BytesIO(b"pull_request_review_thread validation failed"),
+                )
+            return {"id": 77}
 
         with patch("bot.github_api.github_request", side_effect=mock_request):
-            result = ci_tools["create_review"]("micropython", "micropython", 1)
-        assert result == {"review_id": 99}
-
-    def test_422_non_pending_returns_error(self, ci_tools):
-        """422 without 'pending review' in body returns error."""
-        err = urllib.error.HTTPError("", 422, "Unprocessable", None,
-                                     BytesIO(b"Some other validation error"))
-        with patch("bot.github_api.github_request", side_effect=err):
-            result = ci_tools["create_review"]("micropython", "micropython", 1)
-        assert "error" in result
-        assert "422" in result["error"]
-
-
-# --- add_review_comment error handling ---
-
-class TestAddReviewCommentErrors:
-    def test_success(self, ci_tools):
-        with patch("bot.github_api.github_request", return_value={"id": 123}):
-            result = ci_tools["add_review_comment"](
-                "micropython", "micropython", 1, 42, "file.c", "comment", 10,
+            result = ci_tools["post_review"](
+                "micropython", "micropython", 1, "summary", comments,
             )
-        assert result == {"comment_id": 123}
+        assert result["review_id"] == 77
+        assert result["rejected_comments"] == 1
 
-    def test_422_returns_error_with_context(self, ci_tools):
-        err = urllib.error.HTTPError("", 422, "Unprocessable", None,
-                                     BytesIO(b"line not part of diff"))
-        with patch("bot.github_api.github_request", side_effect=err):
-            result = ci_tools["add_review_comment"](
-                "micropython", "micropython", 1, 42, "ports/stm32/main.c", "bad line", 999, "RIGHT",
+    def test_http_error_returns_error(self, ci_tools):
+        def mock_request(method, url, payload=None, **kwargs):
+            if method == "GET":
+                return []
+            raise urllib.error.HTTPError("", 500, "Server Error", None, BytesIO(b""))
+
+        with patch("bot.github_api.github_request", side_effect=mock_request):
+            result = ci_tools["post_review"](
+                "micropython", "micropython", 1, "summary",
             )
         assert "error" in result
-        assert result["comment_id"] is None
-        assert result["failed_path"] == "ports/stm32/main.c"
-        assert result["failed_line"] == 999
-        assert result["failed_side"] == "RIGHT"
-        assert "422" in result["error"]
-
-    def test_404_returns_error(self, ci_tools):
-        err = urllib.error.HTTPError("", 404, "Not Found", None, BytesIO(b""))
-        with patch("bot.github_api.github_request", side_effect=err):
-            result = ci_tools["add_review_comment"](
-                "micropython", "micropython", 1, 42, "file.c", "comment", 10,
-            )
-        assert "error" in result
-        assert "404" in result["error"]
-        assert result["failed_path"] == "file.c"
+        assert "500" in result["error"]
 
     def test_network_error_returns_error(self, ci_tools):
-        err = urllib.error.URLError("timeout")
-        with patch("bot.github_api.github_request", side_effect=err):
-            result = ci_tools["add_review_comment"](
-                "micropython", "micropython", 1, 42, "file.c", "comment", 10,
+        def mock_request(method, url, payload=None, **kwargs):
+            if method == "GET":
+                return []
+            raise urllib.error.URLError("Connection refused")
+
+        with patch("bot.github_api.github_request", side_effect=mock_request):
+            result = ci_tools["post_review"](
+                "micropython", "micropython", 1, "summary",
             )
         assert "error" in result
         assert "Network error" in result["error"]
-        assert result["failed_path"] == "file.c"
 
-
-# --- submit_review error handling ---
-
-class TestSubmitReviewErrors:
-    def test_success(self, ci_tools):
-        with patch("bot.github_api.github_request", return_value=None):
-            result = ci_tools["submit_review"](
-                "micropython", "micropython", 1, 42, "summary",
-            )
-        assert result == {"status": "submitted"}
-
-    def test_404_returns_error(self, ci_tools):
-        err = urllib.error.HTTPError("", 404, "Not Found", None, BytesIO(b""))
-        with patch("bot.github_api.github_request", side_effect=err):
-            result = ci_tools["submit_review"](
-                "micropython", "micropython", 1, 42, "summary",
-            )
-        assert result["status"] == "failed"
-        assert "error" in result
-        assert "404" in result["error"]
-
-    def test_network_error_returns_error(self, ci_tools):
-        err = urllib.error.URLError("Connection reset")
-        with patch("bot.github_api.github_request", side_effect=err):
-            result = ci_tools["submit_review"](
-                "micropython", "micropython", 1, 42, "summary",
-            )
-        assert result["status"] == "failed"
-        assert "Network error" in result["error"]
-
-    def test_invalid_event_still_raises(self, ci_tools):
-        """ValueError for invalid event should still propagate."""
-        with pytest.raises(ValueError, match="COMMENT"):
-            ci_tools["submit_review"](
-                "micropython", "micropython", 1, 42, "summary", event="APPROVE",
-            )
+    def test_repo_check(self, ci_tools):
+        with pytest.raises(ValueError, match="does not match"):
+            ci_tools["post_review"]("evil", "repo", 1, "body")

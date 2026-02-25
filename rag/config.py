@@ -6,11 +6,17 @@ import os
 
 
 def _detect_micropython_repo() -> Path | None:
-    """Walk up from CWD looking for a MicroPython checkout.
+    """Find a MicroPython checkout.
 
-    Identifies a MicroPython repo by the presence of py/runtime.c,
-    which is unique to MicroPython checkouts.
+    Checks MPY_CHECKOUT env var first, then walks up from CWD.
+    Identifies a MicroPython repo by the presence of py/runtime.c.
     """
+    env_path = os.environ.get("MPY_CHECKOUT")
+    if env_path:
+        p = Path(env_path)
+        if (p / "py" / "runtime.c").is_file():
+            return p
+
     try:
         cwd = Path.cwd().resolve()
     except OSError:

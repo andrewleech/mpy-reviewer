@@ -20,10 +20,13 @@ services:
       - mpy-checkout:/workspace/micropython
       - token-share:/var/run/token
       - hf-cache:/home/botuser/.cache/huggingface
+      - review-tmp:/var/run/review-tmp
     environment:
       - GITHUB_TOKEN_FILE=/var/run/token/github_token
       - MPY_CHECKOUT=/workspace/micropython
       - MPY_REVIEWER_BOT_MODE=1
+      - MPY_REVIEW_TMPDIR=/var/run/review-tmp
+      - HF_HUB_OFFLINE=1
       - BOT_TARGET_REPO=${BOT_TARGET_REPO:-micropython/micropython}
     healthcheck:
       test: ["CMD", "python", "-c",
@@ -58,6 +61,7 @@ services:
       - ./config/claude-oauth/:/config/claude-oauth/
       - mpy-checkout:/workspace/micropython
       - token-share:/var/run/token
+      - review-tmp:/var/run/review-tmp:ro
     environment:
       - BOT_CONFIG_PATH=/config/bot.toml
       - GITHUB_TOKEN_FILE=/var/run/token/github_token
@@ -80,6 +84,10 @@ networks:
 volumes:
   mpy-checkout:
   hf-cache:
+  review-tmp:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
   token-share:
     driver_opts:
       type: tmpfs

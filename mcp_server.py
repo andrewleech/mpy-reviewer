@@ -10,6 +10,7 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 from fastmcp import FastMCP
@@ -76,6 +77,16 @@ def _extract_files_from_diff(diff_text: str) -> list:
     return extract_diff_file_paths(diff_text)
 
 
+def _make_review_tmpdir() -> str:
+    """Create a temp directory for review example files.
+
+    Uses MPY_REVIEW_TMPDIR as the parent if set (shared volume in Docker),
+    otherwise falls back to the system default.
+    """
+    base = os.environ.get("MPY_REVIEW_TMPDIR")
+    return tempfile.mkdtemp(prefix="mpy-review-", dir=base)
+
+
 @mcp.tool()
 def review_diff(
     diff_text: str,
@@ -130,9 +141,10 @@ def review_diff(
             logger.warning(f"review_diff: codebase context failed (%.1fs): {e}",
                            time.monotonic() - t0)
 
-    _temp_dir, file_infos = builder.write_example_files(results)
-    logger.info("review_diff: wrote %d example files (%.1fs)",
-                len(file_infos), time.monotonic() - t0)
+    temp_dir = _make_review_tmpdir()
+    _temp_dir, file_infos = builder.write_example_files(results, temp_dir=temp_dir)
+    logger.info("review_diff: wrote %d example files to %s (%.1fs)",
+                len(file_infos), temp_dir, time.monotonic() - t0)
 
     prompt = builder.build_orchestration_prompt(
         file_infos=file_infos,
@@ -208,9 +220,10 @@ def review_pr(
             logger.warning("review_pr: codebase context failed (%.1fs): %s",
                            time.monotonic() - t0, e)
 
-    _temp_dir, file_infos = builder.write_example_files(results)
-    logger.info("review_pr: wrote %d example files (%.1fs)",
-                len(file_infos), time.monotonic() - t0)
+    temp_dir = _make_review_tmpdir()
+    _temp_dir, file_infos = builder.write_example_files(results, temp_dir=temp_dir)
+    logger.info("review_pr: wrote %d example files to %s (%.1fs)",
+                len(file_infos), temp_dir, time.monotonic() - t0)
 
     prompt = builder.build_orchestration_prompt(
         file_infos=file_infos,
