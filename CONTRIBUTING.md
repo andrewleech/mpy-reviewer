@@ -54,11 +54,10 @@ mpy-reviewer/
 The review database is built in three stages: collect → categorize → index. Each stage is resumable and incremental.
 
 ```bash
-source venv/bin/activate
-python scripts/collect.py                # 1. Fetch from GitHub API
-python scripts/categorize_headless.py    # 2. Classify via Claude CLI
-python scripts/build_index_resume.py     # 3. Embed + build vec0/FTS5 index
-mpy-reviewer stats                       # 4. Verify
+uv run python scripts/collect.py                # 1. Fetch from GitHub API
+uv run python scripts/categorize_headless.py    # 2. Classify via Claude CLI
+uv run python scripts/build_index_resume.py     # 3. Embed + build vec0/FTS5 index
+uv run mpy-reviewer stats                       # 4. Verify
 ```
 
 See [docs/DATA_PIPELINE.md](docs/DATA_PIPELINE.md) for prerequisites, hardcoded values, performance characteristics, and troubleshooting.
@@ -123,8 +122,7 @@ From validation on 40 samples:
 ## Running Tests
 
 ```bash
-source venv/bin/activate
-pytest
+uv run pytest
 ```
 
 ## See Also

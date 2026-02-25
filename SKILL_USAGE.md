@@ -104,7 +104,7 @@ When you ask Claude to review code, the skill agent:
 
 1. **Parses your intent** - Understands what you want reviewed
 2. **Generates the diff** - Runs appropriate git command (diff, show, etc.)
-3. **Invokes the tool** - Pipes to `/home/anl/mpy/mpy-reviewer/venv/bin/mpy-reviewer`
+3. **Invokes the tool** - Pipes to `uv run mpy-reviewer`
 4. **Chooses options** - Selects --codebase, --rerank, output format based on context
 5. **Presents results** - Provides maintainer-style review feedback conversationally
 
@@ -140,8 +140,7 @@ Can you /mpy-review the current branch?
 The review database hasn't been built. Run:
 ```bash
 cd /home/anl/mpy/mpy-reviewer
-source venv/bin/activate
-python scripts/build_index_resume.py
+uv run python scripts/build_index_resume.py
 ```
 
 ### No response from skill

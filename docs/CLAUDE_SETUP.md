@@ -73,9 +73,7 @@ cargo install codanna --all-features
 
 ```bash
 cd /home/anl/mpy/mpy-reviewer
-python3 -m venv venv
-source venv/bin/activate
-pip install -e .
+uv sync
 ```
 
 ### 4. Verify Installation
@@ -150,8 +148,7 @@ source ~/.bashrc  # or source ~/.zshrc
 
 ```bash
 cd /home/anl/mpy/mpy-reviewer
-source venv/bin/activate
-pip install -e .
+uv sync
 ```
 
 ## Advanced: Hook Configuration

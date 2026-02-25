@@ -1,5 +1,5 @@
 #!/bin/bash
-# Plugin SessionStart hook: ensure venv, package, and codanna are installed
+# Plugin SessionStart hook: ensure dependencies and codanna are installed
 set -e
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-.}"
@@ -19,31 +19,19 @@ if [ -f "$DB_FILE" ] && head -1 "$DB_FILE" 2>/dev/null | grep -q "^version https
     fi
 fi
 
-# --- Python venv and package ---
+# --- Python dependencies via uv ---
 
-VENV_DIR="$PLUGIN_ROOT/venv"
-
-if command -v uv &>/dev/null; then
-    # uv manages the venv and install in one step
-    if [ ! -d "$VENV_DIR" ] || ! "$VENV_DIR/bin/python" -c "import rag" 2>/dev/null; then
-        echo "Installing mpy-reviewer package via uv..."
-        uv sync --project "$PLUGIN_ROOT" --python-preference system
-    fi
-elif command -v pip &>/dev/null || command -v pip3 &>/dev/null; then
-    if [ ! -d "$VENV_DIR" ]; then
-        echo "Creating Python virtual environment..."
-        python3 -m venv "$VENV_DIR"
-    fi
-    if ! "$VENV_DIR/bin/python" -c "import rag" 2>/dev/null; then
-        echo "Installing mpy-reviewer package via pip..."
-        "$VENV_DIR/bin/pip" install -e "$PLUGIN_ROOT" --quiet
-    fi
-else
+if ! command -v uv &>/dev/null; then
     echo ""
-    echo "ERROR: Neither uv nor pip found. Install uv to use mpy-reviewer:"
+    echo "ERROR: uv not found. Install it to use mpy-reviewer:"
     echo "  curl -LsSf https://astral.sh/uv/install.sh | sh"
     echo ""
     exit 1
+fi
+
+if ! uv run --project "$PLUGIN_ROOT" python -c "import rag" 2>/dev/null; then
+    echo "Installing mpy-reviewer package via uv..."
+    uv sync --project "$PLUGIN_ROOT"
 fi
 
 # --- codanna (semantic code search) ---

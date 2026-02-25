@@ -4,7 +4,7 @@ Get started with the MicroPython code review assistant in 5 minutes.
 
 ## Install as Claude Code Plugin
 
-The plugin handles venv creation, Python dependencies, and codanna installation automatically.
+The plugin handles Python dependencies (via uv) and codanna installation automatically.
 
 ```
 /plugin marketplace add andrewleech/mpy-reviewer
@@ -20,12 +20,8 @@ For use outside Claude Code or to build the vector index manually:
 ```bash
 cd /path/to/mpy-reviewer
 
-python3 -m venv venv
-source venv/bin/activate
-
-# CPU-only PyTorch (recommended unless you have CUDA)
-pip install torch --index-url https://download.pytorch.org/whl/cpu
-pip install -e .
+# Install all Python dependencies (creates .venv automatically)
+uv sync
 
 # codanna for codebase analysis (requires Rust)
 cargo install codanna --all-features
@@ -34,15 +30,14 @@ cargo install codanna --all-features
 ## Build Index (2-3 hours on CPU, 15-20 min on GPU) ⏳
 
 ```bash
-source venv/bin/activate
-mpy-reviewer index --force --batch-size 32
+uv run python scripts/build_index_resume.py
 ```
 
 **Check progress:**
 ```bash
 tail -f index_build.log
 # Or while running in background:
-watch 'ps aux | grep mpy-reviewer | grep index'
+watch 'ps aux | grep build_index | grep -v grep'
 ```
 
 ## Try It Out (after index is built)
@@ -67,33 +62,33 @@ cat > sample.patch << 'EOF'
 EOF
 
 # Get review context
-mpy-reviewer review --diff sample.patch
+uv run mpy-reviewer review --diff sample.patch
 
 # Get full prompt for Claude
-mpy-reviewer review --diff sample.patch --output prompt
+uv run mpy-reviewer review --diff sample.patch --output prompt
 ```
 
 ### Example 2: Review a GitHub PR
 
 ```bash
 # Review PR by number
-mpy-reviewer review --pr 12345 --output prompt
+uv run mpy-reviewer review --pr 12345 --output prompt
 ```
 
 ### Example 3: Advanced Options
 
 ```bash
 # Include codebase context
-mpy-reviewer review --diff sample.patch --codebase
+uv run mpy-reviewer review --diff sample.patch --codebase
 
 # Use cross-encoder re-ranking (slower, more accurate)
-mpy-reviewer review --diff sample.patch --rerank
+uv run mpy-reviewer review --diff sample.patch --rerank
 
 # Both combined (best quality)
-mpy-reviewer review --diff sample.patch --codebase --rerank --output prompt
+uv run mpy-reviewer review --diff sample.patch --codebase --rerank --output prompt
 
 # Get structured output
-mpy-reviewer review --diff sample.patch --output json | jq '.review_examples[0]'
+uv run mpy-reviewer review --diff sample.patch --output json | jq '.review_examples[0]'
 ```
 
 ## Use with Claude Code
@@ -132,19 +127,19 @@ print(prompt)
 
 ```bash
 # Search by keyword
-mpy-reviewer search "memory leak"
-mpy-reviewer search "null pointer"
+uv run mpy-reviewer search "memory leak"
+uv run mpy-reviewer search "null pointer"
 
 # Filter by domain
-mpy-reviewer search "API design" --domain api_design
-mpy-reviewer search "edge cases" --domain correctness
+uv run mpy-reviewer search "API design" --domain api_design
+uv run mpy-reviewer search "edge cases" --domain correctness
 
 # Filter by severity
-mpy-reviewer search "blocking issue" --severity blocking
-mpy-reviewer search "code style" --severity nitpick
+uv run mpy-reviewer search "blocking issue" --severity blocking
+uv run mpy-reviewer search "code style" --severity nitpick
 
 # Show only style examples
-mpy-reviewer search "function naming" --style-only
+uv run mpy-reviewer search "function naming" --style-only
 ```
 
 ## Common Tasks
@@ -152,26 +147,26 @@ mpy-reviewer search "function naming" --style-only
 ### Find All Reviews on Memory Issues
 
 ```bash
-mpy-reviewer review --diff code.patch --domain memory --top-k 15
+uv run mpy-reviewer review --diff code.patch --domain memory --top-k 15
 ```
 
 ### Find Blocking Issues Pattern
 
 ```bash
-mpy-reviewer search "common error pattern" --severity blocking --domain correctness
+uv run mpy-reviewer search "common error pattern" --severity blocking --domain correctness
 ```
 
 ### Get Just the Code Examples
 
 ```bash
-mpy-reviewer review --diff code.patch --output json | \
+uv run mpy-reviewer review --diff code.patch --output json | \
   jq '.review_examples[] | {domain, severity, body}'
 ```
 
 ### Generate Full Review Prompt
 
 ```bash
-mpy-reviewer review --diff code.patch \
+uv run mpy-reviewer review --diff code.patch \
   --codebase \
   --rerank \
   --output prompt > review_prompt.txt
@@ -185,20 +180,20 @@ mpy-reviewer review --diff code.patch \
 
 ```bash
 # Create evaluation dataset with 20 samples
-mpy-reviewer eval build-dataset --count 20 --output eval/dataset.json
+uv run mpy-reviewer eval build-dataset --count 20 --output eval/dataset.json
 
 # Stratified by domain (balanced coverage)
-mpy-reviewer eval build-dataset --count 50 --stratify domain
+uv run mpy-reviewer eval build-dataset --count 50 --stratify domain
 ```
 
 ### Measure Retrieval Quality
 
 ```bash
 # Run evaluation
-mpy-reviewer eval retrieval --dataset eval/dataset.json --output eval/results
+uv run mpy-reviewer eval retrieval --dataset eval/dataset.json --output eval/results
 
 # View results
-mpy-reviewer eval metrics --results-dir eval/results
+uv run mpy-reviewer eval metrics --results-dir eval/results
 ```
 
 Expected metrics (on CPU-based search):
@@ -211,11 +206,10 @@ Expected metrics (on CPU-based search):
 ### "Index not found" Error
 
 ```bash
-source venv/bin/activate
-mpy-reviewer stats
+uv run mpy-reviewer stats
 
 # If index doesn't exist:
-mpy-reviewer index --force
+uv run python scripts/build_index_resume.py
 ```
 
 ### Models Won't Download
@@ -226,19 +220,12 @@ ping huggingface.co
 
 # Clear cache and try again
 rm -rf ~/.cache/huggingface
-mpy-reviewer stats
+uv run mpy-reviewer stats
 ```
 
 ### Running Out of Memory
 
-```bash
-# Reduce batch size during indexing
-mpy-reviewer index --force --batch-size 8
-
-# Or use CPU-only (if you installed with GPU)
-pip install torch --index-url https://download.pytorch.org/whl/cpu
-mpy-reviewer index --force --batch-size 16
-```
+The index builder uses batch_size=4 with periodic GC by default. If still out of memory, edit the constants in `scripts/build_index_resume.py`.
 
 ### Re-ranking is Slow
 
@@ -246,7 +233,7 @@ Re-ranking takes 5-10 seconds on CPU. Options:
 
 ```bash
 # Run without re-ranking (faster)
-mpy-reviewer review --diff code.patch
+uv run mpy-reviewer review --diff code.patch
 
 # Or use on GPU (1-2 seconds)
 # (if GPU is available and torch CUDA is installed)
@@ -256,20 +243,20 @@ mpy-reviewer review --diff code.patch
 
 | Want | Command |
 |------|---------|
-| **Fastest** | `mpy-reviewer review --diff code.patch` |
-| **Balanced** | `mpy-reviewer review --diff code.patch --codebase` |
-| **Best Quality** | `mpy-reviewer review --diff code.patch --codebase --rerank` |
-| **Full Prompt** | `mpy-reviewer review --diff code.patch --codebase --rerank --output prompt` |
+| **Fastest** | `uv run mpy-reviewer review --diff code.patch` |
+| **Balanced** | `uv run mpy-reviewer review --diff code.patch --codebase` |
+| **Best Quality** | `uv run mpy-reviewer review --diff code.patch --codebase --rerank` |
+| **Full Prompt** | `uv run mpy-reviewer review --diff code.patch --codebase --rerank --output prompt` |
 
 ## System Statistics
 
 ```bash
-mpy-reviewer stats
+uv run mpy-reviewer stats
 ```
 
 Should show:
 - Index exists: Yes
-- Number of records: 18,614
+- Number of records: 19,465
 - Index size: ~80 MB
 
 ## Next Steps
@@ -294,17 +281,17 @@ For more details, see:
 
 ```bash
 # Show all commands
-mpy-reviewer --help
+uv run mpy-reviewer --help
 
 # Show command-specific help
-mpy-reviewer review --help
-mpy-reviewer search --help
-mpy-reviewer eval --help
+uv run mpy-reviewer review --help
+uv run mpy-reviewer search --help
+uv run mpy-reviewer eval --help
 
 # Check installation
-python3 -c "import rag; print(rag.__version__)"
+uv run python -c "import rag; print('OK')"
 ```
 
 ---
 
-**Next**: Build the index with `mpy-reviewer index --force` and try the examples above!
+**Next**: Build the index with `uv run python scripts/build_index_resume.py` and try the examples above!

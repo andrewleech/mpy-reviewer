@@ -15,8 +15,8 @@
   "mcpServers": {
     "mpy-reviewer": {
       "type": "stdio",
-      "command": "$CLAUDE_PROJECT_DIR/venv/bin/python",
-      "args": ["$CLAUDE_PROJECT_DIR/mcp_server.py"],
+      "command": "uv",
+      "args": ["run", "--project", "$CLAUDE_PROJECT_DIR", "python", "$CLAUDE_PROJECT_DIR/mcp_server.py"],
       "env": {
         "PYTHONPATH": "$CLAUDE_PROJECT_DIR"
       }

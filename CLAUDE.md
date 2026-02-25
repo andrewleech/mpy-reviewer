@@ -16,8 +16,8 @@ This project creates a queryable RAG (Retrieval-Augmented Generation) system of 
 - Graph-aware context expansion (reply chains, PR sibling comments, file-level aggregation)
 
 **Current Status:**
-- ✅ Data collection complete (22,805 comments from 5,542 PRs)
-- ✅ Categorization complete (18,614 categorized comments)
+- ✅ Data collection complete (5,898 PRs across micropython + micropython-lib)
+- ✅ Categorization complete (19,465 valid categorized comments)
 - ✅ Vector index built (sqlite-vec with 768-dim CodeRankEmbed embeddings)
 - ✅ Semantic search validated and working
 - ✅ CLI tools operational
@@ -73,9 +73,8 @@ mpy-reviewer/
 ├── .mcp.json                      # MCP server config (plugin installs)
 ├── docs/                          # Documentation and notes
 ├── logs/                          # Script logs
-├── venv/                          # Python virtual environment
-├── pyproject.toml                 # Package configuration
-├── requirements.txt               # Dependencies
+├── pyproject.toml                 # Package configuration (uv manages .venv automatically)
+├── uv.lock                        # Locked dependency versions
 ├── schema.sql                     # SQLite schema definition
 └── CLAUDE.md                      # This file
 ```
@@ -98,35 +97,35 @@ For development on this repo or use outside Claude Code:
 ```bash
 cd /home/anl/mpy/mpy-reviewer
 
-python3 -m venv venv
-source venv/bin/activate
+# Install all Python dependencies (creates .venv automatically)
+uv sync
 
-pip install torch --index-url https://download.pytorch.org/whl/cpu
-pip install -e .
-
+# codanna for codebase analysis (requires Rust)
 cargo install codanna --all-features
 ```
 
 ### Using the CLI
 
+Use `uv run` to invoke commands (automatically uses the managed `.venv`):
+
 ```bash
 # Show index statistics
-mpy-reviewer stats
+uv run mpy-reviewer stats
 
 # Search for similar reviews
-mpy-reviewer search "memory allocation error handling" -k 5
+uv run mpy-reviewer search "memory allocation error handling" -k 5
 
 # Search with filters
-mpy-reviewer search "GPIO configuration" --component port_specific --domain api_design
+uv run mpy-reviewer search "GPIO configuration" --component port_specific --domain api_design
 
 # Generate review context for a PR
-mpy-reviewer review --pr 17321
+uv run mpy-reviewer review --pr 17321
 
 # Generate review context from a diff file
-mpy-reviewer review --diff path/to/changes.diff
+uv run mpy-reviewer review --diff path/to/changes.diff
 
 # Output as JSON for programmatic use
-mpy-reviewer search "type checking" --json
+uv run mpy-reviewer search "type checking" --json
 ```
 
 ### Using as a Claude Code Skill
@@ -252,11 +251,10 @@ The usage logs help identify performance bottlenecks, measure the impact of diff
 The database is extended via a 3-stage pipeline: collect → categorize → index. Each stage is resumable.
 
 ```bash
-source venv/bin/activate
-python scripts/collect.py                # 1. Fetch from GitHub API (requires gh CLI)
-python scripts/categorize_headless.py    # 2. Classify via Claude CLI
-python scripts/build_index_resume.py     # 3. Embed + build vec0/FTS5 index
-mpy-reviewer stats                       # 4. Verify
+uv run python scripts/collect.py                # 1. Fetch from GitHub API (requires gh CLI)
+uv run python scripts/categorize_headless.py    # 2. Classify via Claude CLI
+uv run python scripts/build_index_resume.py     # 3. Embed + build vec0/FTS5 index
+uv run mpy-reviewer stats                       # 4. Verify
 ```
 
 See [docs/DATA_PIPELINE.md](docs/DATA_PIPELINE.md) for prerequisites, hardcoded values, performance notes, and troubleshooting.
@@ -309,49 +307,28 @@ All categorization fields stored as vec0 metadata or auxiliary columns, plus:
 - `has_code_suggestion`: Boolean - includes code examples
 - `keywords`: JSON array of 2-5 technical terms
 
-## Current Index Statistics (December 2024)
+## Current Index Statistics (February 2026)
 
 ```
-Total indexed records: 18,614
+Total indexed records: 19,465
+Repos: micropython/micropython (5,646 PRs), micropython/micropython-lib (252 PRs)
 
 Domain Distribution:
-  correctness:   3,939 (21.2%)
-  code_style:    3,212 (17.3%)
-  api_design:    2,369 (12.7%)
-  documentation: 2,138 (11.5%)
-  architecture:  2,098 (11.3%)
-  testing:       1,547 (8.3%)
-  build_system:  1,334 (7.2%)
-  portability:     675 (3.6%)
-  performance:     604 (3.2%)
-  memory:          554 (3.0%)
-
-Component Distribution:
-  port_specific: 6,039 (32.4%)
-  py_core:       5,943 (31.9%)
-  extmod:        1,827 (9.8%)
-  docs:          1,201 (6.5%)
-  tests:         1,150 (6.2%)
-  build_system:  1,142 (6.1%)
-  tools:           831 (4.5%)
-  drivers:         406 (2.2%)
+  correctness:    4,100 (21.1%)
+  code_style:     3,328 (17.1%)
+  api_design:     2,493 (12.8%)
+  documentation:  2,244 (11.5%)
+  architecture:   2,236 (11.5%)
+  testing:        1,611 (8.3%)
+  build_system:   1,395 (7.2%)
+  portability:      695 (3.6%)
+  performance:      641 (3.3%)
+  memory:           575 (3.0%)
 
 Severity Distribution:
-  suggestion: 10,778 (57.9%)
-  nitpick:     5,297 (28.5%)
-  blocking:    2,539 (13.6%)
-
-Language Context:
-  c_code:        12,437 (66.8%)
-  python_code:    3,196 (17.2%)
-  documentation:  1,715 (9.2%)
-  makefile:         649 (3.5%)
-  yaml:             302 (1.6%)
-  shell_script:     172 (0.9%)
-
-Quality Metrics:
-  Reusable patterns (is_pattern=true): 55.9%
-  Has code suggestion: 33.1%
+  suggestion: 11,393 (58.6%)
+  nitpick:     5,427 (27.9%)
+  blocking:    2,645 (13.6%)
 ```
 
 ## Troubleshooting
@@ -379,10 +356,10 @@ If the vec_reviews table doesn't exist yet:
 
 ```bash
 # Check if table exists
-python -c "from rag.indexer import get_sqlite_connection, _vec_table_exists; conn = get_sqlite_connection(); print(_vec_table_exists(conn))"
+uv run python -c "from rag.indexer import get_sqlite_connection, _vec_table_exists; conn = get_sqlite_connection(); print(_vec_table_exists(conn))"
 
 # Build or rebuild the index
-python scripts/build_index_resume.py
+uv run python scripts/build_index_resume.py
 ```
 
 ### Full-Text Search Error
@@ -390,8 +367,7 @@ python scripts/build_index_resume.py
 If the FTS5 index is missing or corrupted, rebuild it:
 
 ```bash
-source venv/bin/activate
-python scripts/add_fts_index.py
+uv run python scripts/add_fts_index.py
 ```
 
 This rebuilds the FTS5 index from vec_reviews data without re-embedding (takes ~5 seconds).
@@ -400,7 +376,7 @@ This rebuilds the FTS5 index from vec_reviews data without re-embedding (takes ~
 
 ```bash
 # Debug single categorization
-python scripts/debug_categorization.py
+uv run python scripts/debug_categorization.py
 
 # Check Claude CLI works
 claude --version
@@ -468,12 +444,8 @@ Query Text
 
 ## Dependencies
 
-Core:
-- `sqlite-vec>=0.1.6` - Vector search extension for SQLite
-- `transformers>=4.36.0` - Model loading
-- `torch>=2.0.0` - PyTorch (CPU or CUDA)
-- `click>=8.0.0` - CLI framework
-- `tqdm` - Progress bars
+All Python dependencies are declared in `pyproject.toml` and locked in `uv.lock`. Run `uv sync` to install them into the managed `.venv`.
 
-Optional:
-- `sentence-transformers` - For cross-encoder re-ranking
+Core: sqlite-vec, sentence-transformers, torch (CPU via pytorch-cpu index), click, tqdm, fastmcp.
+
+External: `codanna` (Rust, installed via `cargo install codanna --all-features`).

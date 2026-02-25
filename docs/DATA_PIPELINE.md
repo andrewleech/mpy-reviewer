@@ -4,7 +4,7 @@ The review database is built in three stages: collect, categorize, index. This d
 
 ## Prerequisites
 
-- **Python 3.10+** with a virtual environment (`source venv/bin/activate`)
+- **uv** — Python package manager (`uv --version`); run `uv sync` to install all dependencies
 - **`gh` CLI** — authenticated with a GitHub token that has repo read access (`gh auth status`)
 - **`claude` CLI** — needed for the categorization step (`claude --version`)
 - **Rust/cargo** — only if building codanna for codebase context features
@@ -12,8 +12,7 @@ The review database is built in three stages: collect, categorize, index. This d
 ## Step 1: Collect Reviews from GitHub
 
 ```bash
-source venv/bin/activate
-python scripts/collect.py
+uv run python scripts/collect.py
 ```
 
 Fetches PR metadata, review comments, issue comments, and review verdicts for all PRs where `dpgeorge` commented on `micropython/micropython`. Data is stored in `data/reviews.db`.
@@ -21,7 +20,7 @@ Fetches PR metadata, review comments, issue comments, and review verdicts for al
 **Multi-repo collection:** Use `--repo` to collect from other repositories:
 
 ```bash
-python scripts/collect.py --repo micropython/micropython-lib
+uv run python scripts/collect.py --repo micropython/micropython-lib
 ```
 
 Each repo's sync state is tracked independently (`last_sync:{repo}` in `sync_state`). PR numbers are scoped by repo via `UNIQUE(repo, number)` in the `prs` table.
@@ -44,11 +43,13 @@ Each repo's sync state is tracked independently (`last_sync:{repo}` in `sync_sta
 ## Step 2: Categorize Comments
 
 ```bash
-nohup python scripts/categorize_headless.py > logs/categorization_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+nohup env -u CLAUDECODE uv run python scripts/categorize_headless.py > logs/categorization_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 tail -f logs/categorization_*.log
 ```
 
 Uses `claude -p` in headless mode with JSON schema enforcement to classify each comment across 13 fields (domain, severity, component, language_context, etc.). Runs against the Haiku model for cost efficiency.
+
+**Note:** The `env -u CLAUDECODE` is required when running from within a Claude Code session to allow nested `claude` CLI invocations.
 
 **Hardcoded values** (in `scripts/categorize_headless.py`):
 | Constant | Value | Purpose |
@@ -57,16 +58,16 @@ Uses `claude -p` in headless mode with JSON schema enforcement to classify each 
 | `MAX_BUDGET` | `$50.00` | Spend cap per run |
 | `TIMEOUT_SECONDS` | 300 | Per-batch timeout |
 
-**Cost:** ~$2–4 for the full dataset (~18,600 comments).
+**Cost:** ~$2–4 for the full dataset (~19,500 comments).
 
 **Check progress:**
 ```bash
-python -c "
+uv run python -c "
 import sqlite3
 conn = sqlite3.connect('data/reviews.db')
 total = conn.execute('SELECT COUNT(*) FROM review_comments').fetchone()[0]
 total += conn.execute('SELECT COUNT(*) FROM issue_comments').fetchone()[0]
-total += conn.execute('SELECT COUNT(*) FROM reviews WHERE body IS NOT NULL').fetchone()[0]
+total += conn.execute(\"SELECT COUNT(*) FROM reviews WHERE body IS NOT NULL AND body != ''\").fetchone()[0]
 categorized = conn.execute('SELECT COUNT(*) FROM comment_categories WHERE theme != \"FAILED_CATEGORIZATION\"').fetchone()[0]
 print(f'Categorized: {categorized}/{total} ({100*categorized/total:.1f}%)')
 "
@@ -77,13 +78,13 @@ Categorization uses a checkpoint system and can be interrupted and resumed.
 ## Step 3: Build Vector Index
 
 ```bash
-python scripts/build_index_resume.py 2>&1 | tee logs/index_build_$(date +%Y%m%d_%H%M%S).log
+uv run python scripts/build_index_resume.py 2>&1 | tee logs/index_build_$(date +%Y%m%d_%H%M%S).log
 ```
 
 Embeds all categorized comments using CodeRankEmbed (768 dimensions) into a sqlite-vec `vec0` virtual table, with an FTS5 full-text index alongside it.
 
 **Performance (CPU, WSL2, 45GB RAM):**
-- ~5 hours for 18,614 records
+- ~5 hours for ~19,500 records
 - ~6GB peak memory with batch_size=4
 - 2–13 items/sec depending on text length
 
@@ -93,13 +94,13 @@ The script supports resume — interruptions are safe. Progress is checkpointed 
 
 ```bash
 # Index statistics
-mpy-reviewer stats
+uv run mpy-reviewer stats
 
 # Test search
-mpy-reviewer search "memory allocation" -k 5
+uv run mpy-reviewer search "memory allocation" -k 5
 
 # Programmatic check
-python -c "
+uv run python -c "
 from rag.indexer import get_sqlite_connection, _vec_table_exists
 conn = get_sqlite_connection()
 print(f'Index exists: {_vec_table_exists(conn)}')
@@ -118,16 +119,16 @@ The resume-capable script uses batch_size=4 and periodic GC by default. If memor
 ### Vector Index Not Found
 
 ```bash
-python -c "from rag.indexer import get_sqlite_connection, _vec_table_exists; conn = get_sqlite_connection(); print(_vec_table_exists(conn))"
+uv run python -c "from rag.indexer import get_sqlite_connection, _vec_table_exists; conn = get_sqlite_connection(); print(_vec_table_exists(conn))"
 
 # Rebuild
-python scripts/build_index_resume.py
+uv run python scripts/build_index_resume.py
 ```
 
 ### FTS5 Index Missing or Corrupted
 
 ```bash
-python scripts/add_fts_index.py
+uv run python scripts/add_fts_index.py
 ```
 
 Rebuilds the FTS5 index from vec_reviews data without re-embedding (~5 seconds).
@@ -136,7 +137,7 @@ Rebuilds the FTS5 index from vec_reviews data without re-embedding (~5 seconds).
 
 ```bash
 claude --version          # Verify CLI is installed
-python scripts/debug_categorization.py  # Debug a single categorization
+uv run python scripts/debug_categorization.py  # Debug a single categorization
 ```
 
 ### GitHub API Rate Limits

@@ -24,7 +24,7 @@ Results are filtered by component (py_core, extmod, ports, etc.), severity (bloc
 /plugin install mpy-reviewer@mpy-reviewer
 ```
 
-The plugin's SessionStart hook sets up the venv, installs the package, and starts the MCP server automatically. Requires Python 3.10+ and Rust/cargo (codanna is installed automatically for codebase-aware search).
+The plugin's SessionStart hook installs dependencies via uv and starts the MCP server automatically. Requires Python 3.10+, uv, and Rust/cargo (codanna is installed automatically for codebase-aware search).
 
 Once installed, ask Claude to review your code:
 

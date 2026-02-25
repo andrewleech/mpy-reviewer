@@ -7,10 +7,10 @@ Processes comments in batches of 20 for optimal context usage.
 """
 
 import json
+import os
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -296,9 +296,7 @@ Comment: "Better to use `machine.idle()` here so it doesn't use power unnecessar
 
 # Comments to Categorize
 
-The comments to categorize are in the file: {comments_file}
-
-Please read this file using the Read tool. If the file is large (>50KB), you can read it in chunks using the offset and limit parameters.
+{comments_text}
 
 # Instructions
 Categorize each comment using all 13 fields. Focus on the PRIMARY concern for domain. Be specific with themes. Include 2-5 relevant keywords. Set port and subsystem to null if not applicable.
@@ -421,15 +419,10 @@ def format_comments_for_prompt(comments):
 
 def categorize_batch(comments):
     """Use Claude CLI to categorize a batch of comments."""
-    # Write comments to a temporary file
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
-        comments_text = format_comments_for_prompt(comments)
-        f.write(comments_text)
-        comments_file = f.name
+    comments_text = format_comments_for_prompt(comments)
+    prompt = PROMPT_TEMPLATE.format(comments_text=comments_text)
 
     try:
-        prompt = PROMPT_TEMPLATE.format(comments_file=comments_file)
-
         cmd = [
             "claude",
             "-p",
@@ -439,9 +432,11 @@ def categorize_batch(comments):
             "--no-session-persistence",
         ]
 
-        # Pass prompt via stdin
+        # Strip CLAUDECODE env var to allow nested CLI invocation
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         result = subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True, check=True, timeout=TIMEOUT_SECONDS
+            cmd, input=prompt, capture_output=True, text=True, check=True, timeout=TIMEOUT_SECONDS,
+            env=env,
         )
         response = json.loads(result.stdout)
         # Claude CLI wraps structured output in "structured_output" field
@@ -458,12 +453,6 @@ def categorize_batch(comments):
         print(f"  Error parsing JSON response: {e}", file=sys.stderr)
         print(f"  Output: {result.stdout}", file=sys.stderr)
         return None
-    finally:
-        # Clean up temporary file
-        try:
-            Path(comments_file).unlink()
-        except Exception:
-            pass  # Ignore cleanup errors
 
 
 def mark_batch_as_failed(conn, comments):
@@ -577,7 +566,7 @@ def main():
             (SELECT COUNT(*) FROM issue_comments WHERE id NOT IN (
                 SELECT comment_id FROM comment_categories WHERE comment_type = 'issue_comment'
             )) +
-            (SELECT COUNT(*) FROM reviews WHERE id NOT IN (
+            (SELECT COUNT(*) FROM reviews WHERE body IS NOT NULL AND body != '' AND id NOT IN (
                 SELECT comment_id FROM comment_categories WHERE comment_type = 'review'
             ))
     """
