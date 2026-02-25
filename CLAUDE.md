@@ -16,8 +16,8 @@ This project creates a queryable RAG (Retrieval-Augmented Generation) system of 
 - Graph-aware context expansion (reply chains, PR sibling comments, file-level aggregation)
 
 **Current Status:**
-- ✅ Data collection complete (5,898 PRs across micropython + micropython-lib)
-- ✅ Categorization complete (19,465 valid categorized comments)
+- ✅ Data collection complete (micropython + micropython-lib PRs)
+- ✅ Categorization complete (~19.5K valid categorized comments)
 - ✅ Vector index built (sqlite-vec with 768-dim CodeRankEmbed embeddings)
 - ✅ Semantic search validated and working
 - ✅ CLI tools operational
@@ -346,7 +346,7 @@ The resume-capable script above handles this automatically.
 
 ### Slow Indexing on CPU
 
-This is expected. CPU-only embedding with CodeRankEmbed processes 2-13 items/sec. For 18,614 records:
+This is expected. CPU-only embedding with CodeRankEmbed processes 2-13 items/sec. For ~19.5K records:
 - Expected time: 4-6 hours
 - The script supports resume, so interruptions are safe
 

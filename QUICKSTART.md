@@ -256,7 +256,7 @@ uv run mpy-reviewer stats
 
 Should show:
 - Index exists: Yes
-- Number of records: 19,465
+- Number of records: ~19,500+
 - Index size: ~80 MB
 
 ## Next Steps

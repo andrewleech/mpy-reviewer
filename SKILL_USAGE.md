@@ -75,7 +75,7 @@ You: Can you /mpy-review stats?
 Claude: ● /mpy-review
 [runs: mpy-reviewer stats]
 Index exists: True
-Number of records: 18,614
+Number of records: 19465
 ```
 
 ## Natural Language Variations

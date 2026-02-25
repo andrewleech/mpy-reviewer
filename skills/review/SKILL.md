@@ -1,12 +1,12 @@
 ---
-description: Use this skill when the user wants to review MicroPython code changes using historical review patterns. Invoke when user mentions reviewing code, finding review examples, or wants feedback on MicroPython PRs/commits/diffs. Provides semantic search across 19,465 categorized review comments.
+description: Use this skill when the user wants to review MicroPython code changes using historical review patterns. Invoke when user mentions reviewing code, finding review examples, or wants feedback on MicroPython PRs/commits/diffs. Provides semantic search across ~19.5K categorized review comments.
 ---
 
 # MicroPython Review Assistant Skill
 
 ## Purpose
 
-This skill provides AI-assisted code review for MicroPython using historical review patterns from the lead maintainer. It searches a database of 19,465 categorized review comments to find relevant examples and generate review context.
+This skill provides AI-assisted code review for MicroPython using historical review patterns from the lead maintainer. It searches a database of ~19.5K categorized review comments to find relevant examples and generate review context.
 
 **Note:** When the `mpy-reviewer` MCP server is available (registered in `.claude/settings.json`), prefer using MCP tools directly (`review_diff`, `search_reviews`, etc.) instead of the CLI. The MCP server keeps the embedding model warm across calls, eliminating 2-3s cold start per query. This skill remains as a fallback for sessions outside the project scope.
 
@@ -334,7 +334,7 @@ Inform user if a long operation is running.
 ## Data Scope
 
 The database contains:
-- **19,465 categorized review comments**
+- **~19.5K categorized review comments**
 - **Source:** micropython/micropython and micropython/micropython-lib repositories
 - **Timeframe:** 2013-2026
 - **Coverage:** All PR review comments, issue comments, and review verdicts
@@ -372,4 +372,4 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} mpy-reviewer stats
 
 Should show:
 - Index exists: True
-- Number of records: 19,465
+- Number of records: ~19.5K

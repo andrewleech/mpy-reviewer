@@ -4,7 +4,7 @@ Code review feedback for MicroPython projects, based on historical review patter
 
 ## What It Does
 
-When you're working on MicroPython code, mpy-reviewer searches a database of 18,614 categorized review comments to find feedback relevant to your changes. It covers:
+When you're working on MicroPython code, mpy-reviewer searches a database of ~19.5K categorized review comments to find feedback relevant to your changes. It covers:
 
 - **Correctness** — logic bugs, edge cases, missing error handling
 - **Memory safety** — allocation patterns, leaks, embedded constraints
