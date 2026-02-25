@@ -177,9 +177,63 @@ Review comments from the MicroPython repository have been categorized across 13 
 
 When you submit code for review, the system finds past reviews that are relevant to your changes — matching on code similarity, file paths, and component context. Results are selected for diversity across severity levels and domains so you get a balanced set of feedback, not just the closest matches.
 
+## GitHub Bot
+
+mpy-reviewer can run as a GitHub App that automatically reviews PRs when they are opened or updated.
+
+### Architecture
+
+Two Docker containers behind `docker compose`:
+
+- **webhook** — receives GitHub webhook events, queues review requests, spawns `claude -p` subprocesses with MCP tools and a 600s timeout
+- **mcp-server** — FastMCP server (SSE transport) providing the RAG search tools, CI inspection tools, and the `post_review` tool for posting reviews back to GitHub
+
+The containers share a MicroPython checkout (for codebase-aware search and convention checking) and a tmpfs volume for passing review example files from the MCP server to the Claude subprocess. Authentication uses a GitHub App private key for webhook verification and API access, plus Claude OAuth credentials for the review model.
+
+### Review Prompt
+
+The bot's system prompt (`bot/prompt.py`) instructs the review agent to:
+
+1. **Retrieve past review examples** via `review_diff` — finds similar reviews from the ~19.5K-comment database
+2. **Read coding conventions** from `CODECONVENTIONS.md` in the MicroPython repo
+3. **Check PR description** against `.github/pull_request_template.md` — flags missing Summary, Testing, or Trade-offs sections
+4. **Assess PR size** — suggests splitting if the PR spans unrelated concerns or is too large for effective human review
+5. **Analyze the diff** and post a structured review with inline comments and GitHub suggestion blocks for one-click fixes
+6. **Inspect CI** — checks for failed runs, retrieves annotations and logs, reports specific linter/build/test findings
+
+Review guidance (project values, convention checks, PR template checks, PR size assessment, suggestion block format) is defined in `rag/prompt_builder.py` and shared between the bot and interactive plugin/MCP paths. The bot's prompt adds Docker-specific workflow steps (absolute paths to `CODECONVENTIONS.md` and the PR template) on top of the shared guidance.
+
+PR content is wrapped in security delimiters to prevent prompt injection from untrusted diff/title/body content.
+
+### Deployment
+
+```bash
+# 1. Configure
+cp bot/config/bot.example.toml bot/config/bot.toml  # fill in app ID, webhook secret
+# Place GitHub App private key at bot/config/bot-private-key.pem
+bot/config/refresh-credentials.sh                     # copy Claude OAuth credentials
+
+# 2. Run
+docker compose -f bot/docker-compose.yml up -d
+
+# 3. Point GitHub webhook URL to https://<host>:8080/webhook
+```
+
+See `bot/docker-compose.yml` for the full configuration including volume mounts and environment variables.
+
+### Bot MCP Tools
+
+In addition to the RAG tools listed above, the bot's MCP server registers tools for interacting with GitHub:
+
+| Tool | Purpose |
+|------|---------|
+| `post_review` | Create and submit a review with inline comments in a single API call |
+| `get_check_runs` | List CI check runs for a commit |
+| `get_check_run_annotations` | Get structured linter/build annotations from a check run |
+| `get_workflow_run_log` | Retrieve workflow run logs for build/test failure diagnosis |
+
 ## Roadmap
 
-- GitHub Actions integration for automated review suggestions on PRs
 - Continuous collection of new reviews as the project evolves
 - Author-aware review context — calibrate feedback depth based on contributor history
 - Incremental index updates without full rebuild

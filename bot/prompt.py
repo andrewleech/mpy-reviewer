@@ -26,7 +26,7 @@ def build_system_prompt(
     Returns:
         Complete system prompt string.
     """
-    from rag.prompt_builder import STYLE_GUIDE  # lazy to avoid loading torch at import
+    from rag.prompt_builder import REVIEW_GUIDANCE, STYLE_GUIDE  # lazy to avoid loading torch at import
 
     sections = []
 
@@ -37,13 +37,11 @@ def build_system_prompt(
         "inline comments using the MCP tools available to you.\n"
         "\n"
         "You review in the style of dpgeorge (Damien George), the lead MicroPython "
-        "maintainer. Be terse, technical, and direct. No pleasantries, no hedging.\n"
-        "\n"
-        "MicroPython values high code quality, small binary size, and runtime "
-        "efficiency. Evaluate changes against these priorities."
+        "maintainer. Be terse, technical, and direct. No pleasantries, no hedging."
     )
 
-    # Style guide (from RAG prompt builder)
+    # Shared review guidance + style guide (from RAG prompt builder)
+    sections.append(REVIEW_GUIDANCE)
     sections.append(STYLE_GUIDE)
 
     # Tool workflow
@@ -61,12 +59,8 @@ def build_system_prompt(
         "`/workspace/micropython/.github/pull_request_template.md`. The template "
         "expects Summary, Testing, and Trade-offs sections. If the PR description "
         "is missing required sections or is empty, note this in your review.\n"
-        "5. Assess whether the PR is too large to review effectively. If it spans "
-        "multiple unrelated concerns, mixes refactoring with new features, or is "
-        "so large that a human reviewer would struggle to evaluate it in one "
-        "sitting, suggest breaking it into smaller, focused PRs.\n"
-        "6. Analyze the PR diff provided in the user message.\n"
-        "7. Call `post_review(owner, repo, pr_number, body, comments)` to submit "
+        "5. Analyze the PR diff provided in the user message.\n"
+        "6. Call `post_review(owner, repo, pr_number, body, comments)` to submit "
         "your review in a SINGLE call. The `comments` parameter is a JSON array of "
         "inline comments. The `body` is a short summary (2-4 sentences max).\n"
         "\n"
@@ -116,23 +110,6 @@ def build_system_prompt(
         "- Added lines (`+`): use the `R` number with `side=\"RIGHT\"`\n"
         "- Removed lines (`-`): use the `L` number with `side=\"LEFT\"`\n"
         "- Context lines (` `): use the `R` number with `side=\"RIGHT\"`\n"
-        "\n"
-        "### Suggested fixes\n"
-        "\n"
-        "When the fix is obvious (renaming, typos, wrong operator, missing keyword, "
-        "style issues), include a GitHub suggestion block in the comment body so the "
-        "author can apply it with one click:\n"
-        "\n"
-        "````\n"
-        "```suggestion\n"
-        "corrected line(s) here\n"
-        "```\n"
-        "````\n"
-        "\n"
-        "The suggestion must contain the exact replacement for the line(s) the comment "
-        "is attached to. Only use suggestions for single-line or small multi-line fixes "
-        "where you are confident in the correction. For larger or ambiguous changes, "
-        "describe the fix in prose instead.\n"
         "\n"
         "Use `search_reviews` for targeted follow-up queries if you need more "
         "examples for a specific pattern (e.g. memory allocation, error handling).\n"

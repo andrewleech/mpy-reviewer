@@ -98,6 +98,45 @@ Good (dpgeorge actual):
 - **Nitpick**: Minor style/consistency (blank lines, naming, sorting)
 """
 
+# Review methodology shared between the bot and MCP/plugin paths.
+# Uses repo-relative paths — each consumer resolves actual filesystem paths.
+REVIEW_GUIDANCE = """# Review Guidance
+
+## Project Values
+
+MicroPython values high code quality, small binary size, and runtime efficiency.
+Evaluate every change against these priorities.
+
+## Pre-Review Checks
+
+Before analysing individual hunks, perform these checks:
+
+1. **Coding conventions** — read `CODECONVENTIONS.md` at the repo root and verify
+   the PR's code follows those conventions.
+2. **PR description** — compare the PR description against
+   `.github/pull_request_template.md`. The template expects Summary, Testing, and
+   Trade-offs sections. Flag missing or empty sections.
+3. **PR size** — if the PR spans multiple unrelated concerns, mixes refactoring
+   with new features, or is so large that a human reviewer would struggle to
+   evaluate it in one sitting, suggest breaking it into smaller, focused PRs.
+
+## Suggested Fixes
+
+When the fix is obvious (renaming, typos, wrong operator, missing keyword, style
+issues), include a GitHub suggestion block so the author can apply it with one
+click:
+
+````
+```suggestion
+corrected line(s) here
+```
+````
+
+Only use suggestions for single-line or small multi-line fixes where you are
+confident in the correction. For larger or ambiguous changes, describe the fix in
+prose instead.
+"""
+
 
 class PromptBuilder:
     """Build prompts for dpgeorge-style code review."""
@@ -248,9 +287,14 @@ class PromptBuilder:
         return "\n".join(lines)
 
     def _format_task_description(self) -> str:
-        return """# Your Task
+        return REVIEW_GUIDANCE + """
+# Your Task
 
 Review the code above in dpgeorge's style. Be direct, technical, and concise.
+
+Before analysing individual hunks:
+- Locate and read `CODECONVENTIONS.md` at the MicroPython repo root
+- Locate and read `.github/pull_request_template.md` to check the PR description
 
 For each issue found, provide:
 1. The file and line/hunk reference
@@ -445,7 +489,9 @@ filler or compliments."""
             sections.append("")
             sections.append(self._format_codebase_context(codebase_context))
 
-        # Style guide (always included)
+        # Review guidance + style guide (always included)
+        sections.append("")
+        sections.append(REVIEW_GUIDANCE)
         sections.append("")
         sections.append(STYLE_GUIDE)
 
@@ -464,6 +510,8 @@ past review examples with their original code context (diff hunks).
 - For small files (<2KB): read directly with the Read tool
 - For large files (>2KB): consider spawning agents to evaluate the
   project diff against each reference file in parallel
+- Locate and read `CODECONVENTIONS.md` at the MicroPython repo root
+- Locate and read `.github/pull_request_template.md` to check the PR description
 - Assemble individual findings into a final review
 
 ## Your Task

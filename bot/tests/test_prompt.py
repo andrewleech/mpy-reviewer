@@ -8,6 +8,12 @@ def test_system_prompt_includes_style_guide():
     assert "dpgeorge Review Style" in prompt
 
 
+def test_system_prompt_includes_review_guidance():
+    prompt = build_system_prompt()
+    assert "small binary size" in prompt
+    assert "suggestion" in prompt
+
+
 def test_system_prompt_includes_security_section():
     prompt = build_system_prompt()
     assert "Security" in prompt
