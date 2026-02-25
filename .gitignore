@@ -33,6 +33,12 @@ output/
 # Removed data stores
 data/lance/
 
+# Bot secrets and local config
+bot/.env
+bot/config/bot.toml
+bot/config/bot-private-key.pem
+bot/config/claude-oauth/
+
 # OS
 .DS_Store
 Thumbs.db
