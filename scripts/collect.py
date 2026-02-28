@@ -7,135 +7,22 @@ Supports resume from checkpoint and incremental updates.
 """
 
 import argparse
-import json
 import sqlite3
-import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote
 
-REVIEWER = "dpgeorge"
-DB_PATH = Path(__file__).parent.parent / "data" / "reviews.db"
-SCHEMA_PATH = Path(__file__).parent.parent / "schema.sql"
-
-# Rate limiting
-REQUESTS_PER_HOUR = 5000
-REQUEST_DELAY = 3600 / REQUESTS_PER_HOUR  # ~0.72 seconds
-
-
-def gh_api(endpoint, paginate=False):
-    """Call GitHub API via gh CLI."""
-    cmd = ["gh", "api", "-H", "Accept: application/vnd.github+json"]
-    if paginate:
-        cmd.append("--paginate")
-    cmd.append(endpoint)
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"API error: {result.stderr}", file=sys.stderr)
-        return None
-
-    if not result.stdout.strip():
-        return [] if paginate else None
-
-    # Handle paginated results (multiple JSON arrays concatenated)
-    if paginate:
-        # gh --paginate concatenates JSON arrays, need to parse carefully
-        data = []
-        decoder = json.JSONDecoder()
-        text = result.stdout.strip()
-        pos = 0
-        while pos < len(text):
-            try:
-                obj, end = decoder.raw_decode(text, pos)
-                if isinstance(obj, list):
-                    data.extend(obj)
-                else:
-                    data.append(obj)
-                pos = end
-                # Skip whitespace
-                while pos < len(text) and text[pos] in ' \t\n\r':
-                    pos += 1
-            except json.JSONDecodeError:
-                break
-        return data
-
-    return json.loads(result.stdout)
-
-
-def init_db():
-    """Initialize the database with schema."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-    conn = sqlite3.connect(DB_PATH)
-    with open(SCHEMA_PATH) as f:
-        conn.executescript(f.read())
-    conn.commit()
-    return conn
-
-
-def get_sync_state(conn, key):
-    """Get sync state value."""
-    cursor = conn.execute("SELECT value FROM sync_state WHERE key = ?", (key,))
-    row = cursor.fetchone()
-    return row[0] if row else None
-
-
-def set_sync_state(conn, key, value):
-    """Set sync state value."""
-    conn.execute(
-        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)",
-        (key, value)
-    )
-    conn.commit()
+from collect_utils import (
+    REVIEWER, DB_PATH, REQUEST_DELAY, gh_api, init_db, get_sync_state,
+    set_sync_state, search_in_range
+)
 
 
 def get_collected_pr_numbers(conn, repo):
     """Get set of PR numbers already collected for this repo."""
     cursor = conn.execute("SELECT number FROM prs WHERE repo = ?", (repo,))
     return {row[0] for row in cursor.fetchall()}
-
-
-def search_prs_in_range(base_query, date_range=None):
-    """Search for PRs with optional date range, handling pagination."""
-    query = base_query
-    if date_range:
-        query += f" {date_range}"
-
-    prs = []
-    page = 1
-    per_page = 100
-
-    while True:
-        endpoint = f"search/issues?q={quote(query)}&per_page={per_page}&page={page}&sort=updated&order=desc"
-        result = gh_api(endpoint)
-
-        if result is None or "items" not in result:
-            break
-
-        items = result["items"]
-        if not items:
-            break
-
-        for item in items:
-            prs.append(item["number"])
-
-        if len(items) < per_page:
-            break
-
-        # Check if we hit the 1000 result limit
-        if page >= 10:
-            total_count = result.get("total_count", 0)
-            if total_count > 1000:
-                print(f"    Warning: {total_count} results but only 1000 accessible")
-            break
-
-        page += 1
-        time.sleep(REQUEST_DELAY)
-
-    return prs
 
 
 def search_prs_with_comments(repo, since=None):
@@ -148,7 +35,7 @@ def search_prs_with_comments(repo, since=None):
     if since:
         # Incremental sync - single query should be under 1000 results
         print(f"  Searching for PRs updated since {since}...")
-        return search_prs_in_range(base_query, f"updated:>={since}")
+        return search_in_range(base_query, f"updated:>={since}")
 
     # Full sync - query by year to get all results
     all_prs = set()
@@ -158,7 +45,7 @@ def search_prs_with_comments(repo, since=None):
     for year in range(2013, current_year + 1):
         date_range = f"created:{year}-01-01..{year}-12-31"
         print(f"  Searching PRs from {year}...")
-        year_prs = search_prs_in_range(base_query, date_range)
+        year_prs = search_in_range(base_query, date_range)
         print(f"    Found {len(year_prs)} PRs from {year}")
         all_prs.update(year_prs)
         time.sleep(REQUEST_DELAY)
