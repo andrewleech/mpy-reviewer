@@ -27,7 +27,7 @@ services:
       - MPY_REVIEWER_BOT_MODE=1
       - MPY_REVIEW_TMPDIR=/var/run/review-tmp
       - HF_HUB_OFFLINE=1
-      - BOT_TARGET_REPO=${BOT_TARGET_REPO:-micropython/micropython}
+      - BOT_TARGET_REPOS=${BOT_TARGET_REPOS:-micropython/micropython}
     healthcheck:
       test: ["CMD", "python", "-c",
              "import socket; s=socket.create_connection(('localhost',9090),2); s.close()"]

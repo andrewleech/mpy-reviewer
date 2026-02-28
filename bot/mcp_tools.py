@@ -31,14 +31,19 @@ def register_bot_tools(mcp):
     if not os.environ.get("MPY_REVIEWER_BOT_MODE"):
         return
 
-    target_repo = os.environ.get("BOT_TARGET_REPO", "micropython/micropython")
+    target_repos_raw = (
+        os.environ.get("BOT_TARGET_REPOS")
+        or os.environ.get("BOT_TARGET_REPO")  # back-compat
+        or "micropython/micropython"
+    )
+    target_repos = {r.strip() for r in target_repos_raw.split(",") if r.strip()}
 
     def _check_repo(owner: str, repo: str):
-        """Reject requests targeting repos other than the configured target."""
-        if f"{owner}/{repo}" != target_repo:
+        """Reject requests targeting repos outside the configured allowlist."""
+        full = f"{owner}/{repo}"
+        if full not in target_repos:
             raise ValueError(
-                f"Repository {owner}/{repo} does not match "
-                f"target repo {target_repo}"
+                f"Repository {full} not in target repos"
             )
 
     def _delete_pending_reviews(owner: str, repo: str, pr_number: int) -> None:

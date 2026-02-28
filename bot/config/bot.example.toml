@@ -11,10 +11,11 @@ app_id = 123456
 # """
 private_key_path = "/config/bot-private-key.pem"
 webhook_secret = "whsec_your_webhook_secret_here"
-installation_id = 12345678
+# installation_id is extracted from webhook payloads at runtime
 
 [target]
-repo = "micropython/micropython"
+repos = ["micropython/micropython"]
+# repos = ["micropython/micropython", "contributor/micropython"]
 
 [auth]
 # Claude Code OAuth credentials directory for the bot account.

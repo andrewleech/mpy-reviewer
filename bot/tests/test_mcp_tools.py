@@ -22,7 +22,7 @@ def ci_tools():
     mcp = FastMCP("test")
     env = {
         "MPY_REVIEWER_BOT_MODE": "1",
-        "BOT_TARGET_REPO": "micropython/micropython",
+        "BOT_TARGET_REPOS": "micropython/micropython",
     }
     with patch.dict(os.environ, env):
         from bot.mcp_tools import register_bot_tools
@@ -111,7 +111,7 @@ class TestGetCheckRuns:
         assert result["total_count"] == 0
 
     def test_repo_check(self, ci_tools):
-        with pytest.raises(ValueError, match="does not match"):
+        with pytest.raises(ValueError, match="not in target repos"):
             ci_tools["get_check_runs"]("evil", "repo", "abc")
 
 
@@ -376,5 +376,5 @@ class TestPostReview:
         assert "Network error" in result["error"]
 
     def test_repo_check(self, ci_tools):
-        with pytest.raises(ValueError, match="does not match"):
+        with pytest.raises(ValueError, match="not in target repos"):
             ci_tools["post_review"]("evil", "repo", 1, "body")

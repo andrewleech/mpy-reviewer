@@ -18,7 +18,6 @@ class GitHubAppConfig:
     private_key: str = ""
     private_key_path: str = ""
     webhook_secret: str = ""
-    installation_id: int = 0
 
     def get_private_key_pem(self) -> str:
         """Return the PEM key, reading from file if needed."""
@@ -36,22 +35,22 @@ class GitHubAppConfig:
 
 @dataclass
 class TargetConfig:
-    repo: str = "micropython/micropython"
+    repos: list[str] = field(default_factory=lambda: ["micropython/micropython"])
 
     def __post_init__(self):
-        if "/" not in self.repo:
-            raise ValueError(f"repo must be 'owner/name', got: {self.repo!r}")
-        owner, name = self.repo.split("/", 1)
-        if not owner or not name:
-            raise ValueError(f"repo must be 'owner/name', got: {self.repo!r}")
+        # Back-compat: old config with `repo = "owner/name"` (single string)
+        if isinstance(self.repos, str):
+            self.repos = [self.repos]
+        for r in self.repos:
+            if "/" not in r:
+                raise ValueError(f"repo must be 'owner/name', got: {r!r}")
+            owner, name = r.split("/", 1)
+            if not owner or not name:
+                raise ValueError(f"repo must be 'owner/name', got: {r!r}")
 
-    @property
-    def owner(self) -> str:
-        return self.repo.split("/", 1)[0]
-
-    @property
-    def name(self) -> str:
-        return self.repo.split("/", 1)[1]
+    def accepts(self, repo_full: str) -> bool:
+        """Return True if repo_full is in the allowlist."""
+        return repo_full in self.repos
 
 
 @dataclass
@@ -110,8 +109,6 @@ class BotConfig:
             raise ValueError("github_app.app_id must be set")
         if not self.github_app.webhook_secret:
             raise ValueError("github_app.webhook_secret must be set")
-        if self.github_app.installation_id == 0:
-            raise ValueError("github_app.installation_id must be set")
         # Validate that at least one key source is configured
         if not self.github_app.private_key and not self.github_app.private_key_path:
             raise ValueError(
@@ -176,6 +173,10 @@ def load_config(path: str | Path | None = None) -> BotConfig:
 
 def _build_config(raw: dict) -> BotConfig:
     """Build BotConfig from parsed TOML dict."""
+    # Back-compat: rename old `repo` key to `repos` in [target] section
+    target = raw.get("target")
+    if isinstance(target, dict) and "repo" in target and "repos" not in target:
+        target["repos"] = target.pop("repo")
     return _build_nested_dataclass(BotConfig, raw)
 
 

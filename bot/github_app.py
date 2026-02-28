@@ -109,18 +109,21 @@ def fetch_app_slug(app_id: int, private_key_pem: str) -> str:
 
 
 class GitHubAppAuth:
-    """Manages GitHub App installation token with auto-refresh.
+    """Manages GitHub App installation tokens with auto-refresh.
 
-    Caches the installation token and refreshes it when within 5 minutes
-    of expiry. Writes the token to GITHUB_TOKEN_FILE so the MCP server
-    can read it on each API call.
+    Caches tokens per installation_id and refreshes each independently
+    when within 5 minutes of expiry. Writes the latest token to
+    GITHUB_TOKEN_FILE so the MCP server can read it on each API call.
+
+    The shared token file is safe because ReviewQueue serializes reviews:
+    only one review runs at a time, so the file always holds the token
+    for the currently-active installation.
     """
 
     def __init__(
         self,
         app_id: int,
         private_key_pem: str | Callable[[], str],
-        installation_id: int,
         token_file: str | None = None,
     ):
         self.app_id = app_id
@@ -128,39 +131,40 @@ class GitHubAppAuth:
             self._get_pem = private_key_pem
         else:
             self._get_pem = lambda pem=private_key_pem: pem
-        self.installation_id = installation_id
         self.token_file = token_file or os.environ.get(
             "GITHUB_TOKEN_FILE", DEFAULT_TOKEN_FILE
         )
-        self._token: str | None = None
-        self._expires_at: datetime | None = None
+        self._tokens: dict[int, tuple[str, datetime]] = {}
         self._refresh_lock = threading.Lock()
 
-    def get_token(self) -> str:
+    def get_token(self, installation_id: int) -> str:
         """Get a valid installation token, refreshing if needed."""
-        if self._needs_refresh():
+        if self._needs_refresh(installation_id):
             with self._refresh_lock:
-                if self._needs_refresh():  # double-check after acquiring lock
-                    self._refresh()
-        return self._token
+                if self._needs_refresh(installation_id):
+                    self._refresh(installation_id)
+        return self._tokens[installation_id][0]
 
-    def _needs_refresh(self) -> bool:
-        if self._token is None or self._expires_at is None:
+    def _needs_refresh(self, installation_id: int) -> bool:
+        entry = self._tokens.get(installation_id)
+        if entry is None:
             return True
+        _, expires_at = entry
         now = datetime.now(timezone.utc)
         # Refresh if within 5 minutes of expiry
-        remaining = (self._expires_at - now).total_seconds()
+        remaining = (expires_at - now).total_seconds()
         return remaining < 300
 
-    def _refresh(self) -> None:
+    def _refresh(self, installation_id: int) -> None:
         """Generate a new JWT and exchange it for an installation token."""
-        logger.info("Refreshing GitHub App installation token")
+        logger.info("Refreshing GitHub App token for installation %d", installation_id)
         for attempt in range(2):
             try:
                 jwt_token = generate_jwt(self.app_id, self._get_pem())
-                self._token, self._expires_at = get_installation_token(
-                    jwt_token, self.installation_id
+                token, expires_at = get_installation_token(
+                    jwt_token, installation_id
                 )
+                self._tokens[installation_id] = (token, expires_at)
                 break
             except Exception as e:
                 if attempt == 0:
@@ -169,7 +173,7 @@ class GitHubAppAuth:
                 else:
                     raise
         try:
-            self._write_token_file()
+            self._write_token_file(self._tokens[installation_id][0])
         except OSError as e:
             logger.error(
                 "Token refreshed in memory but file write to %s failed: %s. "
@@ -177,10 +181,11 @@ class GitHubAppAuth:
                 self.token_file, e,
             )
         logger.info(
-            "Token refreshed, expires at %s", self._expires_at.isoformat()
+            "Token refreshed for installation %d, expires at %s",
+            installation_id, self._tokens[installation_id][1].isoformat(),
         )
 
-    def _write_token_file(self) -> None:
+    def _write_token_file(self, token: str) -> None:
         """Write token to the shared file for MCP server to read.
 
         No fsync before rename — token-share is tmpfs so durability is moot.
@@ -188,5 +193,5 @@ class GitHubAppAuth:
         tmp_path = self.token_file + ".tmp"
         fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
-            f.write(self._token)
+            f.write(token)
         os.replace(tmp_path, self.token_file)

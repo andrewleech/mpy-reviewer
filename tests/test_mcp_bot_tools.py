@@ -14,7 +14,7 @@ BOT_TOOL_NAMES = {"post_review", "get_check_runs", "get_check_run_annotations",
 def _clean_env():
     """Ensure bot-related env vars are unset before/after each test."""
     saved = {}
-    for key in ("MPY_REVIEWER_BOT_MODE", "BOT_TARGET_REPO"):
+    for key in ("MPY_REVIEWER_BOT_MODE", "BOT_TARGET_REPOS"):
         saved[key] = os.environ.pop(key, None)
     yield
     for key, val in saved.items():
@@ -129,7 +129,7 @@ def test_bot_tools_registered_with_env_var():
 
 def test_check_repo_rejects_wrong_repo(bot_mcp):
     """post_review raises ValueError for non-target repo."""
-    os.environ["BOT_TARGET_REPO"] = "test/repo"
+    os.environ["BOT_TARGET_REPOS"] = "test/repo"
     # Re-register with new target repo
     from fastmcp import FastMCP
     test_mcp = FastMCP("test")
@@ -143,7 +143,7 @@ def test_check_repo_rejects_wrong_repo(bot_mcp):
     tools = test_mcp._tool_manager._tools
     assert "post_review" in tools
 
-    with pytest.raises(ValueError, match="does not match"):
+    with pytest.raises(ValueError, match="not in target repos"):
         tools["post_review"].fn(
             owner="wrong", repo="repo", pr_number=1,
             body="test",
@@ -162,6 +162,42 @@ def test_check_repo_accepts_target_repo(bot_mcp):
         body="test",
     )
     assert "review_id" in result
+
+
+def test_multi_repo_comma_separated():
+    """BOT_TARGET_REPOS with multiple comma-separated repos accepts all."""
+    from fastmcp import FastMCP
+    from bot.mcp_tools import register_bot_tools
+
+    os.environ["MPY_REVIEWER_BOT_MODE"] = "1"
+    os.environ["BOT_TARGET_REPOS"] = "owner/repo-a, owner/repo-b"
+    test_mcp = FastMCP("test")
+    mock_api = MagicMock()
+    with patch.dict("sys.modules", {
+        "bot": MagicMock(github_api=mock_api),
+        "bot.github_api": mock_api,
+    }):
+        register_bot_tools(test_mcp)
+    tools = test_mcp._tool_manager._tools
+
+    # Both repos should be accepted
+    mock_api.github_request.side_effect = [[], {"id": 1}]
+    result = tools["post_review"].fn(
+        owner="owner", repo="repo-a", pr_number=1, body="ok",
+    )
+    assert "review_id" in result
+
+    mock_api.github_request.side_effect = [[], {"id": 2}]
+    result = tools["post_review"].fn(
+        owner="owner", repo="repo-b", pr_number=1, body="ok",
+    )
+    assert "review_id" in result
+
+    # Other repo should be rejected
+    with pytest.raises(ValueError, match="not in target repos"):
+        tools["post_review"].fn(
+            owner="owner", repo="repo-c", pr_number=1, body="ok",
+        )
 
 
 def test_post_review_success(bot_mcp):

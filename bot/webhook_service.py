@@ -104,11 +104,13 @@ async def _handle_issue_comment(
         return JSONResponse({"status": "ignored", "reason": "invalid repo"})
     repo_owner, repo_name = repo_full.split("/", 1)
 
-    if repo_full != config.target.repo:
-        logger.warning("Webhook for non-target repo %s (target: %s)", repo_full, config.target.repo)
+    if not config.target.accepts(repo_full):
+        logger.warning("Webhook for non-target repo %s", repo_full)
         return JSONResponse({"status": "ignored", "reason": "wrong repo"})
 
-    token = auth.get_token() if auth else None
+    installation_id = payload.get("installation", {}).get("id", 0)
+
+    token = auth.get_token(installation_id) if auth and installation_id else None
     if not is_authorized(
         username, repo_owner, repo_name,
         allowlist=config.authorization.allowlist,
@@ -158,6 +160,7 @@ async def _handle_issue_comment(
         repo_name=repo_name,
         requester=username,
         head_sha=head_sha,
+        installation_id=installation_id,
     )
 
     await queue.enqueue(review_request)
@@ -198,11 +201,12 @@ async def _handle_pull_request(
         logger.warning("Missing or malformed repository.full_name: %r", repo_full)
         return JSONResponse({"status": "ignored", "reason": "invalid repo"})
 
-    if repo_full != config.target.repo:
-        logger.warning("Webhook for non-target repo %s (target: %s)", repo_full, config.target.repo)
+    if not config.target.accepts(repo_full):
+        logger.warning("Webhook for non-target repo %s", repo_full)
         return JSONResponse({"status": "ignored", "reason": "wrong repo"})
 
     repo_owner, repo_name = repo_full.split("/", 1)
+    installation_id = payload.get("installation", {}).get("id", 0)
 
     pr = payload.get("pull_request", {})
     pr_number = pr.get("number", 0)
@@ -228,6 +232,7 @@ async def _handle_pull_request(
         repo_name=repo_name,
         requester=requester,
         head_sha=head_sha,
+        installation_id=installation_id,
     )
 
     await queue.enqueue(review_request)
@@ -265,10 +270,7 @@ def create_app(config: BotConfig | None = None) -> Starlette:
         auth = GitHubAppAuth(
             app_id=config.github_app.app_id,
             private_key_pem=config.github_app.get_private_key_pem,  # callable, not called
-            installation_id=config.github_app.installation_id,
         )
-        # Force initial token refresh
-        auth.get_token()
 
         # Detect bot username from app slug for review_requested matching
         try:
@@ -294,7 +296,7 @@ def create_app(config: BotConfig | None = None) -> Starlette:
             if not req.comment_id:
                 return  # No comment to react to (e.g. review_requested trigger)
             try:
-                token = auth.get_token()
+                token = auth.get_token(req.installation_id)
                 await asyncio.to_thread(
                     github_request, "POST",
                     f"/repos/{req.repo_owner}/{req.repo_name}"
@@ -308,7 +310,7 @@ def create_app(config: BotConfig | None = None) -> Starlette:
             from bot.orchestrator import DiffTooLargeError
 
             try:
-                token = auth.get_token()
+                token = auth.get_token(req.installation_id)
             except Exception as e:
                 logger.error("Token refresh failed in failure handler: %s", e)
                 return  # Can't post reactions/comments without a token

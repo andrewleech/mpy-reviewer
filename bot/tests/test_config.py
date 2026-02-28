@@ -57,7 +57,6 @@ def _minimal_config() -> dict:
         "github_app": {
             "app_id": 12345,
             "webhook_secret": "s3cret",
-            "installation_id": 99,
             "private_key": "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----",
         }
     }
@@ -68,7 +67,6 @@ def test_build_config_minimal():
     assert isinstance(cfg, BotConfig)
     assert cfg.github_app.app_id == 12345
     assert cfg.github_app.webhook_secret == "s3cret"
-    assert cfg.github_app.installation_id == 99
 
 
 def test_bot_config_validates_app_id():
@@ -87,13 +85,23 @@ def test_bot_config_validates_webhook_secret():
 
 def test_target_config_validates_repo_format():
     with pytest.raises(ValueError, match="owner/name"):
-        TargetConfig(repo="noslash")
+        TargetConfig(repos=["noslash"])
 
 
-def test_target_config_valid_repo():
-    tc = TargetConfig(repo="owner/name")
-    assert tc.owner == "owner"
-    assert tc.name == "name"
+def test_target_config_valid_repos():
+    tc = TargetConfig(repos=["owner/name", "other/repo"])
+    assert tc.accepts("owner/name")
+    assert tc.accepts("other/repo")
+    assert not tc.accepts("unknown/repo")
+
+
+def test_target_config_back_compat_single_string():
+    """Old-style `repo = "owner/name"` is wrapped into a list."""
+    raw = _minimal_config()
+    raw["target"] = {"repo": "owner/name"}
+    cfg = _build_config(raw)
+    assert cfg.target.repos == ["owner/name"]
+    assert cfg.target.accepts("owner/name")
 
 
 def test_build_nested_optional_field():
@@ -140,7 +148,6 @@ def test_load_config_from_toml_file():
 [github_app]
 app_id = 99
 webhook_secret = "sec"
-installation_id = 1
 private_key = "-----BEGIN RSA PRIVATE KEY-----\\nfake\\n-----END RSA PRIVATE KEY-----"
 """
     with tempfile.NamedTemporaryFile(suffix=".toml", delete=False) as f:

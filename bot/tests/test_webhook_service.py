@@ -19,7 +19,6 @@ def _make_config() -> BotConfig:
         "github_app": {
             "app_id": 1,
             "webhook_secret": "test-secret",
-            "installation_id": 1,
             "private_key": "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----",
         },
         "authorization": {"allowlist": ["allowed-user"]},
@@ -51,6 +50,7 @@ def _make_payload(
         },
         "issue": issue,
         "repository": {"full_name": repo_full},
+        "installation": {"id": 123},
     }
 
 
@@ -156,6 +156,23 @@ def test_valid_review_queued(app):
     assert resp.status_code == 200
     assert resp.json()["status"] == "queued"
     mock_queue.enqueue.assert_called_once()
+    req = mock_queue.enqueue.call_args[0][0]
+    assert req.installation_id == 123
+
+
+def test_missing_installation_key(app):
+    """Payload without installation key still queues (token=None path)."""
+    app_instance, mock_queue = app
+    payload = _make_payload()
+    del payload["installation"]
+    with TestClient(app_instance) as client:
+        with patch("bot.webhook_service.is_authorized", return_value=True):
+            with patch("bot.webhook_service.github_request"):
+                resp = _post_webhook(client, payload)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "queued"
+    req = mock_queue.enqueue.call_args[0][0]
+    assert req.installation_id == 0
 
 
 def test_invalid_json_body(app):
@@ -421,6 +438,7 @@ def _make_pr_payload(
         },
         "sender": {"login": sender},
         "repository": {"full_name": repo_full},
+        "installation": {"id": 123},
     }
     if reviewer_login is not None:
         payload["requested_reviewer"] = {"login": reviewer_login}

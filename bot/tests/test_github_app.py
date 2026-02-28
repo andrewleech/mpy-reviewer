@@ -40,27 +40,25 @@ def test_generate_jwt_structure():
 
 def test_needs_refresh_no_token():
     auth = GitHubAppAuth(
-        app_id=1, private_key_pem=_TEST_RSA_PEM, installation_id=1,
+        app_id=1, private_key_pem=_TEST_RSA_PEM,
     )
-    assert auth._needs_refresh() is True
+    assert auth._needs_refresh(1) is True
 
 
 def test_needs_refresh_expired():
     auth = GitHubAppAuth(
-        app_id=1, private_key_pem=_TEST_RSA_PEM, installation_id=1,
+        app_id=1, private_key_pem=_TEST_RSA_PEM,
     )
-    auth._token = "tok"
-    auth._expires_at = datetime.now(timezone.utc) + timedelta(minutes=1)
-    assert auth._needs_refresh() is True  # Within 5 min window
+    auth._tokens[1] = ("tok", datetime.now(timezone.utc) + timedelta(minutes=1))
+    assert auth._needs_refresh(1) is True  # Within 5 min window
 
 
 def test_needs_refresh_valid():
     auth = GitHubAppAuth(
-        app_id=1, private_key_pem=_TEST_RSA_PEM, installation_id=1,
+        app_id=1, private_key_pem=_TEST_RSA_PEM,
     )
-    auth._token = "tok"
-    auth._expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
-    assert auth._needs_refresh() is False
+    auth._tokens[1] = ("tok", datetime.now(timezone.utc) + timedelta(minutes=30))
+    assert auth._needs_refresh(1) is False
 
 
 def test_write_token_file_permissions():
@@ -69,10 +67,9 @@ def test_write_token_file_permissions():
     try:
         auth = GitHubAppAuth(
             app_id=1, private_key_pem=_TEST_RSA_PEM,
-            installation_id=1, token_file=path,
+            token_file=path,
         )
-        auth._token = "secret-token"
-        auth._write_token_file()
+        auth._write_token_file("secret-token")
         mode = os.stat(path).st_mode
         assert stat.S_IMODE(mode) == 0o600
         with open(path) as f:
@@ -87,10 +84,9 @@ def test_write_token_file_atomic():
     try:
         auth = GitHubAppAuth(
             app_id=1, private_key_pem=_TEST_RSA_PEM,
-            installation_id=1, token_file=path,
+            token_file=path,
         )
-        auth._token = "secret-token"
-        auth._write_token_file()
+        auth._write_token_file("secret-token")
         # No .tmp file should remain
         assert not os.path.exists(path + ".tmp")
     finally:
@@ -113,11 +109,11 @@ def test_get_installation_token_success():
 def test_get_token_calls_refresh():
     auth = GitHubAppAuth(
         app_id=1, private_key_pem=_TEST_RSA_PEM,
-        installation_id=1, token_file="/dev/null",
+        token_file="/dev/null",
     )
     with patch("bot.github_app.get_installation_token") as mock:
         mock.return_value = ("fresh-token", datetime.now(timezone.utc) + timedelta(hours=1))
-        result = auth.get_token()
+        result = auth.get_token(1)
     assert result == "fresh-token"
     mock.assert_called_once()
 
@@ -125,7 +121,7 @@ def test_get_token_calls_refresh():
 def test_refresh_retries_on_transient_failure():
     auth = GitHubAppAuth(
         app_id=1, private_key_pem=_TEST_RSA_PEM,
-        installation_id=1, token_file="/dev/null",
+        token_file="/dev/null",
     )
     call_count = 0
 
@@ -137,8 +133,8 @@ def test_refresh_retries_on_transient_failure():
         return ("tok", datetime.now(timezone.utc) + timedelta(hours=1))
 
     with patch("bot.github_app.get_installation_token", side_effect=mock_get_token):
-        auth._refresh()
-    assert auth._token == "tok"
+        auth._refresh(1)
+    assert auth._tokens[1][0] == "tok"
     assert call_count == 2
 
 
@@ -146,9 +142,34 @@ def test_refresh_raises_after_retry_exhaustion():
     """Both retry attempts fail — exception propagates."""
     auth = GitHubAppAuth(
         app_id=1, private_key_pem=_TEST_RSA_PEM,
-        installation_id=1, token_file="/dev/null",
+        token_file="/dev/null",
     )
     with patch("bot.github_app.get_installation_token",
                side_effect=RuntimeError("persistent failure")):
         with pytest.raises(RuntimeError, match="persistent failure"):
-            auth._refresh()
+            auth._refresh(1)
+
+
+def test_per_installation_token_cache():
+    """Separate installations get separate cached tokens."""
+    auth = GitHubAppAuth(
+        app_id=1, private_key_pem=_TEST_RSA_PEM,
+        token_file="/dev/null",
+    )
+    expires = datetime.now(timezone.utc) + timedelta(hours=1)
+    call_log = []
+
+    def mock_get_token(jwt_tok, inst_id):
+        call_log.append(inst_id)
+        return (f"tok-{inst_id}", expires)
+
+    with patch("bot.github_app.get_installation_token", side_effect=mock_get_token):
+        t1 = auth.get_token(100)
+        t2 = auth.get_token(200)
+        # Second call for same installation should use cache
+        t1b = auth.get_token(100)
+
+    assert t1 == "tok-100"
+    assert t2 == "tok-200"
+    assert t1b == "tok-100"
+    assert call_log == [100, 200]  # No third call — cached

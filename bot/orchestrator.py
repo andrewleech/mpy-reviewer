@@ -51,7 +51,7 @@ async def run_review(
     Returns:
         True on success, False on failure.
     """
-    token = auth.get_token() if auth else None
+    token = auth.get_token(request.installation_id) if auth else None
 
     # Re-fetch PR metadata — title/body may have changed since webhook receipt.
     try:

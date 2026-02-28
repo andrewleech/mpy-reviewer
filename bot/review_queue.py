@@ -18,6 +18,7 @@ class ReviewRequest:
     repo_name: str
     requester: str
     head_sha: str
+    installation_id: int = 0
 
 
 class ReviewQueue:
