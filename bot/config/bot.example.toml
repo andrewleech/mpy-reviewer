@@ -14,6 +14,16 @@ webhook_secret = "whsec_your_webhook_secret_here"
 # installation_id is extracted from webhook payloads at runtime
 
 [target]
+# Repositories the bot will respond to. Webhooks from repos not listed
+# here are silently ignored.
+#
+# To add a fork:
+#   1. The fork owner installs the GitHub App on their fork
+#   2. The fork owner configures their repo's webhook to point here
+#   3. Add the fork to this list and restart the webhook container
+#
+# The bot authenticates per-repo using the installation_id from each
+# webhook payload, so each fork uses its own App installation token.
 repos = ["micropython/micropython"]
 # repos = ["micropython/micropython", "contributor/micropython"]
 
@@ -23,7 +33,8 @@ repos = ["micropython/micropython"]
 claude_oauth_path = "/config/claude-oauth/"
 
 [authorization]
-# Users allowed to trigger /review beyond repo collaborators
+# Users allowed to trigger /review beyond repo collaborators.
+# Collaborators with write access are always authorized.
 allowlist = [
     "dpgeorge",
 ]
