@@ -449,6 +449,16 @@ def index_stats() -> Dict[str, Any]:
             stats["exists"] = True
             row = conn.execute("SELECT count(*) FROM vec_reviews").fetchone()
             stats["num_records"] = row[0]
+
+        # Check for vec_issues table
+        row = conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='vec_issues'"
+        ).fetchone()
+        if row[0] > 0:
+            issue_count = conn.execute("SELECT count(*) FROM vec_issues").fetchone()[0]
+            stats["vec_issues_exists"] = True
+            stats["vec_issues_records"] = issue_count
+
         conn.close()
     except Exception as e:
         stats["error"] = str(e)
