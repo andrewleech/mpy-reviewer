@@ -19,12 +19,15 @@ _ISSUE_FILTER_KEYS = frozenset({"repo", "state", "component", "port"})
 _SAFE_VALUE_RE = re.compile(r"^[a-zA-Z0-9_/-]+$")
 
 
+_FTS5_SPECIAL_RE = re.compile(r'["\(\)\*\+\-\^:]')
+
+
 def _sanitize_fts_query(query: str) -> str:
     """Sanitize a query string for FTS5 MATCH."""
     terms = query.split()
     quoted = []
     for term in terms:
-        clean = term.replace('"', '').strip()
+        clean = _FTS5_SPECIAL_RE.sub("", term).strip()
         if clean:
             quoted.append(f'"{clean}"')
     if not quoted:
