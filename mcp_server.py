@@ -369,6 +369,203 @@ def get_pr_review_history(
     return get_pr_review_context(pr_number, max_comments=max_comments, repo=repo)
 
 
+# --- Issue triage tools ---
+
+_triage_retriever = None
+_triage_builder = None
+
+
+def _get_triage_retriever():
+    global _triage_retriever
+    if _triage_retriever is None:
+        from triage.retriever import IssueRetriever
+        _triage_retriever = IssueRetriever()
+        _ = _triage_retriever.embedder
+        _ = _triage_retriever.conn
+        logger.info("Triage retriever initialized")
+    return _triage_retriever
+
+
+def _get_triage_builder():
+    global _triage_builder
+    if _triage_builder is None:
+        from triage.prompt_builder import TriagePromptBuilder
+        _triage_builder = TriagePromptBuilder()
+    return _triage_builder
+
+
+@mcp.tool()
+def triage_issue(
+    issue_number: int,
+    repo: str = "micropython/micropython",
+    top_k: int = 5,
+    include_codebase: bool = False,
+) -> str:
+    """Triage a GitHub issue using similar issues, closing refs, and review patterns.
+
+    Primary entry point for issue triage. Fetches the issue, finds similar
+    issues and closing references, optionally searches the codebase, and
+    returns an orchestration prompt for triage assessment.
+
+    Args:
+        issue_number: GitHub issue number.
+        repo: GitHub repository slug (default: micropython/micropython).
+        top_k: Number of similar issues to retrieve (default 5).
+        include_codebase: Include MicroPython codebase context (slower).
+
+    Returns:
+        Markdown triage prompt with similar issues, closing refs, and style guide.
+    """
+    t0 = time.monotonic()
+    logger.info("triage_issue: starting #%d (top_k=%d, include_codebase=%s)",
+                issue_number, top_k, include_codebase)
+
+    retriever = _get_triage_retriever()
+    builder = _get_triage_builder()
+
+    # Fetch issue from DB
+    issue = retriever.get_issue(issue_number, repo)
+    if issue is None:
+        # Try fetching from GitHub
+        issue_data = _fetch_github_issue(issue_number, repo)
+        if issue_data is None:
+            return json.dumps({"error": f"Issue #{issue_number} not found in DB or GitHub"})
+        issue = issue_data
+
+    title = issue.get("title", "")
+    body = issue.get("body", "") or ""
+    state = issue.get("state", "open")
+    labels_raw = issue.get("labels", "[]")
+    if isinstance(labels_raw, str):
+        try:
+            labels = json.loads(labels_raw)
+        except (json.JSONDecodeError, TypeError):
+            labels = []
+    elif isinstance(labels_raw, list):
+        labels = labels_raw
+    else:
+        labels = []
+
+    logger.info("triage_issue: issue fetched (%.1fs)", time.monotonic() - t0)
+
+    # Find similar issues
+    query_text = f"{title}\n\n{body}"
+    similar = retriever.find_potential_duplicates(title, body, top_k=top_k)
+    # Exclude the issue itself from results
+    similar = [s for s in similar if s.get("issue_number") != issue_number or s.get("repo") != repo]
+    logger.info("triage_issue: %d similar issues found (%.1fs)",
+                len(similar), time.monotonic() - t0)
+
+    # Check closing refs
+    closing_refs = retriever.check_closing_refs(issue_number, repo)
+    logger.info("triage_issue: %d closing refs found (%.1fs)",
+                len(closing_refs), time.monotonic() - t0)
+
+    # Related review comments
+    related_reviews = retriever.find_related_reviews(query_text, top_k=5)
+    logger.info("triage_issue: %d related reviews found (%.1fs)",
+                len(related_reviews), time.monotonic() - t0)
+
+    # Codebase context
+    codebase_context = None
+    if include_codebase:
+        try:
+            from rag.codebase import get_codebase_retriever
+            codebase_context = get_codebase_retriever().get_context_for_diff(
+                query_text, top_k=5,
+            )
+            logger.info("triage_issue: codebase context loaded (%.1fs)",
+                        time.monotonic() - t0)
+        except Exception as e:
+            logger.warning("triage_issue: codebase context failed: %s", e)
+
+    # Build triage prompt
+    from triage.prompt_builder import TriageContext
+    context = TriageContext(
+        issue_number=issue_number,
+        issue_title=title,
+        issue_body=body,
+        issue_labels=labels,
+        issue_state=state,
+        issue_repo=repo,
+        similar_issues=similar,
+        related_reviews=related_reviews,
+        closing_refs=closing_refs,
+        codebase_context=codebase_context,
+    )
+
+    prompt = builder.build_triage_prompt(context)
+    logger.info("triage_issue: complete (%.1fs)", time.monotonic() - t0)
+    return prompt
+
+
+@mcp.tool()
+def search_issues(
+    query: str,
+    top_k: int = 10,
+    state: str | None = None,
+    component: str | None = None,
+    port: str | None = None,
+) -> dict:
+    """Search indexed issues by semantic similarity with optional filters.
+
+    Use for finding issues related to a topic or code area.
+
+    Args:
+        query: Natural language search query.
+        top_k: Number of results (default 10).
+        state: Filter by issue state (open, closed).
+        component: Filter by component.
+        port: Filter by port.
+
+    Returns:
+        Dict with 'results' list and 'count'.
+    """
+    retriever = _get_triage_retriever()
+    results = retriever.search_similar_issues(
+        query, top_k=top_k, state=state, component=component, port=port,
+    )
+
+    return {
+        "results": _serialize_results(results),
+        "count": len(results),
+        "query": query,
+        "filters": {
+            k: v for k, v in {
+                "state": state,
+                "component": component,
+                "port": port,
+            }.items() if v is not None
+        },
+    }
+
+
+def _fetch_github_issue(issue_number: int, repo: str) -> dict | None:
+    """Fetch an issue from GitHub when not in DB."""
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repo}/issues/{issue_number}"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout)
+        labels = [l["name"] for l in data.get("labels", [])]
+        return {
+            "number": data["number"],
+            "title": data.get("title", ""),
+            "body": data.get("body", ""),
+            "state": data.get("state", "open"),
+            "labels": json.dumps(labels),
+            "author": data.get("user", {}).get("login", ""),
+            "created_at": data.get("created_at", ""),
+            "closed_at": data.get("closed_at"),
+            "comments_count": data.get("comments", 0),
+        }
+    except Exception:
+        return None
+
+
 if __name__ == "__main__":
     # Bot review-posting tools live in bot.mcp_tools. Registered only for
     # the standalone deployment entry point. Plugin/library imports get the
@@ -376,6 +573,12 @@ if __name__ == "__main__":
     try:
         from bot.mcp_tools import register_bot_tools
         register_bot_tools(mcp)
+    except ImportError:
+        pass
+
+    try:
+        from triage.mcp_tools import register_triage_bot_tools
+        register_triage_bot_tools(mcp)
     except ImportError:
         pass
 

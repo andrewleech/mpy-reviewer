@@ -293,6 +293,116 @@ def _fetch_pr_diff(pr_number: int, repo: str = "micropython/micropython") -> str
 
 
 @cli.group()
+def triage():
+    """Issue triage commands."""
+    pass
+
+
+@triage.command("issue")
+@click.argument("number", type=int)
+@click.option("--repo", default="micropython/micropython", help="GitHub repository slug")
+@click.option("-k", "--top-k", default=5, help="Number of similar issues")
+@click.option("--codebase", is_flag=True, help="Include codebase context")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def triage_issue(ctx, number, repo, top_k, codebase, output_json):
+    """Triage a single issue."""
+    from triage.retriever import get_issue_retriever
+    from triage.prompt_builder import get_triage_builder, TriageContext
+
+    logger = get_logger()
+
+    with logger.track_operation(
+        "triage",
+        issue_number=number,
+        repo=repo,
+        top_k=top_k,
+        codebase=codebase,
+    ) as log_ctx:
+        retriever = get_issue_retriever()
+        builder = get_triage_builder()
+
+        # Fetch issue
+        issue = retriever.get_issue(number, repo)
+        if issue is None:
+            click.echo(f"Issue #{number} not found in database", err=True)
+            sys.exit(1)
+
+        title = issue.get("title", "")
+        body = issue.get("body", "") or ""
+        state = issue.get("state", "open")
+        import json as _json
+        labels_raw = issue.get("labels", "[]")
+        if isinstance(labels_raw, str):
+            try:
+                labels = _json.loads(labels_raw)
+            except (_json.JSONDecodeError, TypeError):
+                labels = []
+        else:
+            labels = labels_raw or []
+
+        query_text = f"{title}\n\n{body}"
+
+        # Find similar issues
+        similar = retriever.find_potential_duplicates(title, body, top_k=top_k)
+        similar = [s for s in similar if s.get("issue_number") != number or s.get("repo") != repo]
+
+        # Closing refs
+        closing_refs = retriever.check_closing_refs(number, repo)
+
+        # Related reviews
+        related_reviews = retriever.find_related_reviews(query_text, top_k=5)
+
+        # Codebase context
+        codebase_context = None
+        if codebase:
+            try:
+                from rag.codebase import get_codebase_retriever
+                codebase_context = get_codebase_retriever().get_context_for_diff(
+                    query_text, top_k=5,
+                )
+            except Exception as e:
+                click.echo(f"Codebase context failed: {e}", err=True)
+
+        log_ctx.set_result_count(len(similar))
+
+        if output_json:
+            output_data = {
+                "issue_number": number,
+                "title": title,
+                "state": state,
+                "labels": labels,
+                "similar_issues": [
+                    {
+                        "issue_number": s.get("issue_number"),
+                        "title": s.get("title"),
+                        "state": s.get("state"),
+                        "score": s.get("rrf_score", 0),
+                    }
+                    for s in similar
+                ],
+                "closing_refs": closing_refs,
+                "related_reviews_count": len(related_reviews),
+            }
+            click.echo(_json.dumps(output_data, indent=2))
+        else:
+            context = TriageContext(
+                issue_number=number,
+                issue_title=title,
+                issue_body=body,
+                issue_labels=labels,
+                issue_state=state,
+                issue_repo=repo,
+                similar_issues=similar,
+                related_reviews=related_reviews,
+                closing_refs=closing_refs,
+                codebase_context=codebase_context,
+            )
+            prompt = builder.build_triage_prompt(context)
+            click.echo(prompt)
+
+
+@cli.group()
 def eval():
     """Evaluation commands."""
     pass
