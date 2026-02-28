@@ -81,21 +81,35 @@ async def _handle_issue_comment(
     auth: GitHubAppAuth | None,
     queue: ReviewQueue,
 ) -> Response:
-    """Handle issue_comment events — /review command trigger."""
+    """Handle issue_comment events — /review or /triage command trigger."""
     # Only handle new comments
     if payload.get("action") != "created":
         return JSONResponse({"status": "ok"})
 
     comment_body = payload.get("comment", {}).get("body", "").strip()
-    # Exact match intentional — only "/review", not "/review please" etc.
-    if comment_body != "/review":
-        return JSONResponse({"status": "ok"})
-
-    # Must be on a PR (issue_comment fires for both issues and PRs)
     issue = payload.get("issue", {})
-    if "pull_request" not in issue:
+    is_pr = "pull_request" in issue
+
+    if comment_body == "/review" and is_pr:
+        return await _handle_review_command(request, payload, issue, config, auth, queue)
+    elif comment_body == "/triage" and not is_pr:
+        triage_queue = getattr(request.app.state, "triage_queue", None)
+        if triage_queue is None:
+            return JSONResponse({"status": "ignored", "reason": "triage not configured"})
+        return await _handle_triage_command(request, payload, issue, config, auth, triage_queue)
+    else:
         return JSONResponse({"status": "ok"})
 
+
+async def _handle_review_command(
+    request: Request,
+    payload: dict,
+    issue: dict,
+    config: BotConfig,
+    auth: GitHubAppAuth | None,
+    queue: ReviewQueue,
+) -> Response:
+    """Handle /review command on a PR."""
     # Authorization check
     username = payload.get("comment", {}).get("user", {}).get("login", "")
     repo_full = payload.get("repository", {}).get("full_name", "")
@@ -168,6 +182,74 @@ async def _handle_issue_comment(
     return JSONResponse({
         "status": "queued",
         "pr_number": pr_number,
+    })
+
+
+async def _handle_triage_command(
+    request: Request,
+    payload: dict,
+    issue: dict,
+    config: BotConfig,
+    auth: GitHubAppAuth | None,
+    queue: ReviewQueue,
+) -> Response:
+    """Handle /triage command on an issue."""
+    username = payload.get("comment", {}).get("user", {}).get("login", "")
+    repo_full = payload.get("repository", {}).get("full_name", "")
+    if not repo_full or "/" not in repo_full:
+        logger.warning("Missing or malformed repository.full_name: %r", repo_full)
+        return JSONResponse({"status": "ignored", "reason": "invalid repo"})
+    repo_owner, repo_name = repo_full.split("/", 1)
+
+    if not config.target.accepts(repo_full):
+        logger.warning("Webhook for non-target repo %s", repo_full)
+        return JSONResponse({"status": "ignored", "reason": "wrong repo"})
+
+    installation_id = payload.get("installation", {}).get("id", 0)
+
+    token = auth.get_token(installation_id) if auth and installation_id else None
+    if not is_authorized(
+        username, repo_owner, repo_name,
+        allowlist=config.authorization.allowlist,
+        token=token,
+    ):
+        logger.info("Unauthorized /triage from %s", username)
+        return JSONResponse({"status": "ignored", "reason": "unauthorized"})
+
+    comment_id = payload.get("comment", {}).get("id", 0)
+    issue_number = issue.get("number", 0)
+    if not issue_number:
+        logger.warning("Missing issue number in webhook payload")
+        return JSONResponse({"status": "ignored", "reason": "missing issue_number"})
+
+    # Add eyes reaction
+    try:
+        await asyncio.to_thread(
+            github_request,
+            "POST",
+            f"/repos/{repo_owner}/{repo_name}/issues/comments/{comment_id}/reactions",
+            {"content": "eyes"},
+            token=token,
+        )
+    except Exception as e:
+        logger.warning("Failed to add eyes reaction: %s", e)
+
+    from bot.review_queue import TriageRequest
+
+    triage_request = TriageRequest(
+        issue_number=issue_number,
+        comment_id=comment_id,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        requester=username,
+        installation_id=installation_id,
+    )
+
+    await queue.enqueue(triage_request)
+
+    return JSONResponse({
+        "status": "queued",
+        "issue_number": issue_number,
     })
 
 
@@ -365,19 +447,72 @@ def create_app(config: BotConfig | None = None) -> Starlette:
             on_failure=_on_failure,
         )
 
+        # Triage queue (opt-in)
+        triage_queue = None
+        if config.triage is not None:
+            from triage.bot_orchestrator import run_triage
+
+            async def _triage_handler(req) -> bool:
+                return await run_triage(req, config, auth=auth)
+
+            async def _triage_on_success(req) -> None:
+                if not req.comment_id:
+                    return
+                try:
+                    token = auth.get_token(req.installation_id)
+                    await asyncio.to_thread(
+                        github_request, "POST",
+                        f"/repos/{req.repo_owner}/{req.repo_name}"
+                        f"/issues/comments/{req.comment_id}/reactions",
+                        {"content": "+1"}, token=token,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to add triage success reaction: %s", e)
+
+            async def _triage_on_failure(req, err) -> None:
+                if not req.comment_id:
+                    return
+                try:
+                    token = auth.get_token(req.installation_id)
+                    await asyncio.to_thread(
+                        github_request, "POST",
+                        f"/repos/{req.repo_owner}/{req.repo_name}"
+                        f"/issues/comments/{req.comment_id}/reactions",
+                        {"content": "confused"}, token=token,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to add triage failure reaction: %s", e)
+
+            triage_queue = ReviewQueue(
+                handler=_triage_handler,
+                on_success=_triage_on_success,
+                on_failure=_triage_on_failure,
+            )
+
         app.state.config = config
         app.state.auth = auth
         app.state.queue = queue
+        app.state.triage_queue = triage_queue
         app.state.failure_counts = failure_counts
 
         worker_task = asyncio.create_task(queue.start_worker())
+        triage_worker_task = None
+        if triage_queue is not None:
+            triage_worker_task = asyncio.create_task(triage_queue.start_worker())
         logger.info("Webhook service started")
         yield
         worker_task.cancel()
+        if triage_worker_task is not None:
+            triage_worker_task.cancel()
         try:
             await worker_task
         except asyncio.CancelledError:
             pass
+        if triage_worker_task is not None:
+            try:
+                await triage_worker_task
+            except asyncio.CancelledError:
+                pass
         logger.info("Webhook service shutting down")
 
     return Starlette(routes=routes, lifespan=lifespan)

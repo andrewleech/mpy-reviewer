@@ -94,6 +94,14 @@ class McpConfig:
 
 
 @dataclass
+class TriageBotConfig:
+    model: str = "sonnet"
+    timeout_seconds: int = 600
+    top_k: int = 5
+    include_codebase: bool = True
+
+
+@dataclass
 class BotConfig:
     github_app: GitHubAppConfig = field(default_factory=GitHubAppConfig)
     target: TargetConfig = field(default_factory=TargetConfig)
@@ -103,6 +111,7 @@ class BotConfig:
     prompt: PromptConfig = field(default_factory=PromptConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     mcp: McpConfig = field(default_factory=McpConfig)
+    triage: TriageBotConfig | None = None
 
     def __post_init__(self):
         if self.github_app.app_id == 0:

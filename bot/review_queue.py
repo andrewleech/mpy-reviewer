@@ -21,6 +21,18 @@ class ReviewRequest:
     installation_id: int = 0
 
 
+@dataclass
+class TriageRequest:
+    """A queued triage request."""
+
+    issue_number: int
+    comment_id: int
+    repo_owner: str
+    repo_name: str
+    requester: str
+    installation_id: int = 0
+
+
 class ReviewQueue:
     """Processes review requests serially with cancel-restart for same-PR duplicates.
 
