@@ -38,14 +38,14 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "bot/tests"]
+testpaths = ["tests", "bot/tests", "triage/tests"]
 
 [project.scripts]
 mpy-reviewer = "rag.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["rag*", "bot*"]
+include = ["rag*", "bot*", "triage*"]
 
 [tool.uv]
 index-url = "https://pypi.org/simple"

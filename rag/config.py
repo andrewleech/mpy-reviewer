@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from dataclasses import dataclass, field
+from typing import Optional
 import os
 
 
@@ -86,3 +87,42 @@ def set_config(config: Config) -> None:
     """Set the global configuration instance."""
     global _config
     _config = config
+
+
+@dataclass
+class TriageConfig:
+    """Confidence thresholds and settings for issue triage."""
+
+    # Duplicate detection thresholds
+    duplicate_high_confidence: float = 0.85
+    duplicate_medium_confidence: float = 0.60
+    similarity_high: float = 0.90
+    similarity_medium: float = 0.70
+
+    # Label confidence thresholds
+    label_auto_apply: float = 0.85
+    label_suggest: float = 0.60
+
+    # Closing ref confidence (merged PR that references the issue)
+    closing_ref_merged_confidence: float = 0.95
+
+    # Retrieval settings
+    top_k_similar_issues: int = 5
+    top_k_related_reviews: int = 5
+
+    # Heuristic boost factors
+    boost_closed_with_merged_pr: float = 1.5
+    boost_same_component: float = 1.3
+    boost_title_overlap: float = 1.2
+
+
+# Global triage config
+_triage_config: Optional[TriageConfig] = None
+
+
+def get_triage_config() -> TriageConfig:
+    """Get the global triage configuration instance."""
+    global _triage_config
+    if _triage_config is None:
+        _triage_config = TriageConfig()
+    return _triage_config
