@@ -17,17 +17,18 @@ services:
       dockerfile: bot/Dockerfile
     command: ["python", "mcp_server.py", "--transport", "sse", "--port", "9090"]
     volumes:
+      - ./config/bot.toml:/config/bot.toml:ro
       - mpy-checkout:/workspace/micropython
       - token-share:/var/run/token
       - hf-cache:/home/botuser/.cache/huggingface
       - review-tmp:/var/run/review-tmp
     environment:
+      - BOT_CONFIG_PATH=/config/bot.toml
       - GITHUB_TOKEN_FILE=/var/run/token/github_token
       - MPY_CHECKOUT=/workspace/micropython
       - MPY_REVIEWER_BOT_MODE=1
       - MPY_REVIEW_TMPDIR=/var/run/review-tmp
       - HF_HUB_OFFLINE=1
-      - BOT_TARGET_REPOS=${BOT_TARGET_REPOS:-micropython/micropython}
     healthcheck:
       test: ["CMD", "python", "-c",
              "import socket; s=socket.create_connection(('localhost',9090),2); s.close()"]

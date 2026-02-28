@@ -8,10 +8,31 @@ import io
 import logging
 import os
 import re
+import tomllib
 import urllib.error
 import zipfile
 
 logger = logging.getLogger(__name__)
+
+
+def _load_target_repos() -> set[str]:
+    """Load target repos from bot.toml (via BOT_CONFIG_PATH) or env var fallback."""
+    config_path = os.environ.get("BOT_CONFIG_PATH")
+    if config_path:
+        try:
+            with open(config_path, "rb") as f:
+                raw = tomllib.load(f)
+            target = raw.get("target", {})
+            repos = target.get("repos") or target.get("repo")  # back-compat
+            if isinstance(repos, str):
+                repos = [repos]
+            if repos:
+                return set(repos)
+        except (FileNotFoundError, PermissionError, tomllib.TOMLDecodeError) as e:
+            logger.warning("Failed to read target repos from %s: %s", config_path, e)
+    # Env var fallback for non-Docker / legacy setups
+    raw = os.environ.get("BOT_TARGET_REPOS", "micropython/micropython")
+    return {r.strip() for r in raw.split(",") if r.strip()}
 
 
 def register_bot_tools(mcp):
@@ -31,12 +52,7 @@ def register_bot_tools(mcp):
     if not os.environ.get("MPY_REVIEWER_BOT_MODE"):
         return
 
-    target_repos_raw = (
-        os.environ.get("BOT_TARGET_REPOS")
-        or os.environ.get("BOT_TARGET_REPO")  # back-compat
-        or "micropython/micropython"
-    )
-    target_repos = {r.strip() for r in target_repos_raw.split(",") if r.strip()}
+    target_repos = _load_target_repos()
 
     def _check_repo(owner: str, repo: str):
         """Reject requests targeting repos outside the configured allowlist."""

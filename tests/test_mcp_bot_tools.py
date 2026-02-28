@@ -1,6 +1,7 @@
 """Tests for bot.mcp_tools — review-posting tool registration and guards."""
 
 import os
+import tempfile
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -9,12 +10,14 @@ import pytest
 BOT_TOOL_NAMES = {"post_review", "get_check_runs", "get_check_run_annotations",
                   "get_workflow_run_log"}
 
+_ENV_KEYS = ("MPY_REVIEWER_BOT_MODE", "BOT_TARGET_REPOS", "BOT_CONFIG_PATH")
+
 
 @pytest.fixture(autouse=True)
 def _clean_env():
     """Ensure bot-related env vars are unset before/after each test."""
     saved = {}
-    for key in ("MPY_REVIEWER_BOT_MODE", "BOT_TARGET_REPOS"):
+    for key in _ENV_KEYS:
         saved[key] = os.environ.pop(key, None)
     yield
     for key, val in saved.items():
@@ -198,6 +201,50 @@ def test_multi_repo_comma_separated():
         tools["post_review"].fn(
             owner="owner", repo="repo-c", pr_number=1, body="ok",
         )
+
+
+def test_target_repos_from_toml_config():
+    """BOT_CONFIG_PATH takes precedence over BOT_TARGET_REPOS env var."""
+    from fastmcp import FastMCP
+    from bot.mcp_tools import register_bot_tools
+
+    toml_content = b"""
+[target]
+repos = ["toml/repo-a", "toml/repo-b"]
+"""
+    with tempfile.NamedTemporaryFile(suffix=".toml", delete=False) as f:
+        f.write(toml_content)
+        toml_path = f.name
+
+    try:
+        os.environ["MPY_REVIEWER_BOT_MODE"] = "1"
+        os.environ["BOT_CONFIG_PATH"] = toml_path
+        # Set env var that should be ignored when TOML is available
+        os.environ["BOT_TARGET_REPOS"] = "env/should-be-ignored"
+
+        test_mcp = FastMCP("test")
+        mock_api = MagicMock()
+        with patch.dict("sys.modules", {
+            "bot": MagicMock(github_api=mock_api),
+            "bot.github_api": mock_api,
+        }):
+            register_bot_tools(test_mcp)
+        tools = test_mcp._tool_manager._tools
+
+        # TOML repos should be accepted
+        mock_api.github_request.side_effect = [[], {"id": 1}]
+        result = tools["post_review"].fn(
+            owner="toml", repo="repo-a", pr_number=1, body="ok",
+        )
+        assert "review_id" in result
+
+        # Env var repo should be rejected
+        with pytest.raises(ValueError, match="not in target repos"):
+            tools["post_review"].fn(
+                owner="env", repo="should-be-ignored", pr_number=1, body="ok",
+            )
+    finally:
+        os.unlink(toml_path)
 
 
 def test_post_review_success(bot_mcp):
