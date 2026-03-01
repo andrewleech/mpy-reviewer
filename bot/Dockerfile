@@ -38,6 +38,7 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY rag/ rag/
 COPY bot/ bot/
+COPY triage/ triage/
 COPY mcp_server.py .
 COPY data/reviews.db data/
 

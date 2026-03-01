@@ -32,6 +32,11 @@ class TriageRequest:
     requester: str
     installation_id: int = 0
 
+    @property
+    def pr_number(self) -> int:
+        """Alias so ReviewQueue can use the same dedup/logging interface."""
+        return self.issue_number
+
 
 class ReviewQueue:
     """Processes review requests serially with cancel-restart for same-PR duplicates.
