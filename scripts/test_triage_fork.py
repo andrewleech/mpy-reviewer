@@ -17,6 +17,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from collect_utils import gh_api, REQUEST_DELAY
 
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 def search_open_issues(repo, limit=100):
     """Search for all open issues in repo, respecting GitHub's 1000 result limit."""
-    query = f"repo:{repo} is:issue -is:pr is:open"
+    query = quote(f"repo:{repo} is:issue -is:pr is:open")
     items = []
     page = 1
     per_page = 100
@@ -113,7 +114,6 @@ def run_triage_on_issue(repo, issue_number):
         # Import triage modules
         from triage.retriever import IssueRetriever
         from triage.prompt_builder import TriageContext, get_triage_builder
-        from triage.confidence import compute_duplicate_confidence
 
         title = issue.get("title", "")
         body = issue.get("body", "") or ""
@@ -146,6 +146,13 @@ def run_triage_on_issue(repo, issue_number):
         # Check for closing references
         closing_refs = retriever.check_closing_refs(issue_number, repo)
 
+        # Filter self-matches (the source issue appears in the index)
+        original_number = int(title.split("#")[1].split("]")[0])
+        if similar_issues:
+            similar_issues = [s for s in similar_issues if s.get("issue_number") != original_number]
+        if duplicates:
+            duplicates = [d for d in duplicates if d.get("issue_number") != original_number]
+
         # Build triage context
         context = TriageContext(
             issue_number=issue_number,
@@ -164,46 +171,50 @@ def run_triage_on_issue(repo, issue_number):
         builder = get_triage_builder()
         prompt = builder.build_triage_prompt(context)
 
-        # Extract suggested labels and duplicates for report
-        suggested_labels = []
-        duplicate_info = None
-
+        # Extract duplicate candidates (include even below threshold for report)
+        duplicate_candidates = []
         if duplicates:
-            top_dup = duplicates[0]
-            similarity = top_dup.get("rrf_score", 0.0)
-            has_merged = False
-            for ref in closing_refs:
-                if ref.get("pr_merged"):
-                    has_merged = True
-                    break
+            for dup in duplicates[:3]:
+                duplicate_candidates.append({
+                    "issue_number": dup.get("issue_number", "?"),
+                    "title": dup.get("title", "(unknown)"),
+                    "state": dup.get("state", "?"),
+                    "rrf_score": dup.get("rrf_score", 0.0),
+                })
 
-            title_overlap = 0.0
-            dup_confidence = compute_duplicate_confidence(
-                similarity,
-                has_merged,
-                title_overlap
-            )
+        # Extract top similar issues for the report
+        top_similar = []
+        if similar_issues:
+            for sim in similar_issues[:5]:
+                top_similar.append({
+                    "issue_number": sim.get("issue_number", "?"),
+                    "title": sim.get("title", "(unknown)"),
+                    "state": sim.get("state", "?"),
+                    "rrf_score": sim.get("rrf_score", 0.0),
+                })
 
-            if dup_confidence >= 0.5:
-                dup_num = top_dup.get("issue_number", "?")
-                duplicate_info = {
-                    "issue_number": dup_num,
-                    "confidence": dup_confidence,
-                    "evidence": f"Semantic similarity (RRF): {similarity:.2f}",
-                    "has_merged_ref": has_merged,
-                }
+        # Extract top related reviews
+        top_reviews = []
+        if related_reviews:
+            for rev in related_reviews[:3]:
+                top_reviews.append({
+                    "pr_number": rev.get("pr_number", "?"),
+                    "body": (rev.get("body", "") or "")[:150],
+                    "domain": rev.get("domain", "?"),
+                })
 
         return {
             "issue_number": issue_number,
-            "original_number": int(title.split("#")[1].split("]")[0]),
+            "original_number": original_number,
             "title": title,
             "original_labels": labels,
-            "suggested_labels": suggested_labels,
-            "duplicate_info": duplicate_info,
+            "duplicate_candidates": duplicate_candidates,
+            "top_similar": top_similar,
+            "top_reviews": top_reviews,
             "similar_issues_count": len(similar_issues) if similar_issues else 0,
             "related_reviews_count": len(related_reviews) if related_reviews else 0,
             "closing_refs_count": len(closing_refs) if closing_refs else 0,
-            "prompt_snippet": prompt[:500] + "..." if len(prompt) > 500 else prompt,
+            "prompt_length": len(prompt),
         }
 
     except Exception as e:
@@ -233,27 +244,56 @@ def generate_report(results, output_path):
             "",
             f"**Original Labels:** {', '.join(result['original_labels']) if result['original_labels'] else '(none)'}",
             "",
-            f"**Suggested Labels:** {', '.join(result['suggested_labels']) if result['suggested_labels'] else '(none)'}",
+            f"**Prompt length:** {result.get('prompt_length', 0):,} chars",
             "",
         ])
 
-        if result.get("duplicate_info"):
-            dup = result["duplicate_info"]
+        # Top similar issues
+        top_similar = result.get("top_similar", [])
+        if top_similar:
             report_lines.extend([
-                f"**Duplicate Detection:**",
-                f"- Potential duplicate: #{dup['issue_number']}",
-                f"- Confidence: {dup['confidence']:.2f}",
-                f"- Evidence: {dup['evidence']}",
-                f"- Has merged closing ref: {dup['has_merged_ref']}",
+                f"### Similar Issues ({result['similar_issues_count']} total)",
+                "",
+                "| # | Title | State | RRF Score |",
+                "|---|-------|-------|-----------|",
+            ])
+            for sim in top_similar:
+                report_lines.append(
+                    f"| {sim['issue_number']} | {sim['title'][:80]} | {sim['state']} | {sim['rrf_score']:.4f} |"
+                )
+            report_lines.append("")
+
+        # Duplicate candidates
+        dup_candidates = result.get("duplicate_candidates", [])
+        if dup_candidates:
+            report_lines.extend([
+                "### Duplicate Candidates",
+                "",
+                "| # | Title | State | RRF Score |",
+                "|---|-------|-------|-----------|",
+            ])
+            for dup in dup_candidates:
+                report_lines.append(
+                    f"| {dup['issue_number']} | {dup['title'][:80]} | {dup['state']} | {dup['rrf_score']:.4f} |"
+                )
+            report_lines.append("")
+
+        # Related reviews
+        top_reviews = result.get("top_reviews", [])
+        if top_reviews:
+            report_lines.extend([
+                f"### Related Reviews ({result['related_reviews_count']} total)",
                 "",
             ])
+            for rev in top_reviews:
+                body_preview = rev['body'].replace('\n', ' ').strip()
+                report_lines.extend([
+                    f"- **PR #{rev['pr_number']}** ({rev['domain']}): {body_preview}",
+                ])
+            report_lines.append("")
 
         report_lines.extend([
-            f"**Similar Issues Found:** {result['similar_issues_count']}",
-            "",
-            f"**Related Reviews Found:** {result['related_reviews_count']}",
-            "",
-            f"**Closing References Found:** {result['closing_refs_count']}",
+            f"**Closing References:** {result['closing_refs_count']}",
             "",
             "---",
             "",
@@ -292,6 +332,12 @@ def main():
         help="Skip cloning; only run triage on already-cloned issues",
     )
     parser.add_argument(
+        "--issues",
+        type=str,
+        default="",
+        help="Comma-separated issue numbers to triage (use with --skip-clone)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print what would be done without cloning",
@@ -304,22 +350,26 @@ def main():
 
     args = parser.parse_args()
 
-    logger.info(f"Sampling {args.count} issues from {args.repo}")
-
-    # Search for open issues
-    logger.info(f"Searching for open issues in {args.repo}...")
-    issues = search_open_issues(args.repo, limit=args.count * 3)  # Fetch extra to sample from
-    if not issues:
-        logger.error("No issues found")
-        sys.exit(1)
-
-    # Randomly sample
-    sampled = random.sample(issues, min(args.count, len(issues)))
-    logger.info(f"Sampled {len(sampled)} issues")
-
     cloned_numbers = []
 
-    if not args.skip_clone:
+    if args.issues:
+        cloned_numbers = [int(n.strip()) for n in args.issues.split(",") if n.strip()]
+        logger.info(f"Using provided issue numbers: {cloned_numbers}")
+    else:
+        logger.info(f"Sampling {args.count} issues from {args.repo}")
+
+        # Search for open issues
+        logger.info(f"Searching for open issues in {args.repo}...")
+        issues = search_open_issues(args.repo, limit=args.count * 3)
+        if not issues:
+            logger.error("No issues found")
+            sys.exit(1)
+
+        # Randomly sample
+        sampled = random.sample(issues, min(args.count, len(issues)))
+        logger.info(f"Sampled {len(sampled)} issues")
+
+    if not cloned_numbers and not args.skip_clone:
         # Clone issues to fork
         logger.info(f"Cloning to {args.fork}...")
         for issue in sampled:
