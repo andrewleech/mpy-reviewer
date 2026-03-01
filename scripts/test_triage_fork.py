@@ -63,10 +63,24 @@ def search_open_issues(repo, limit=100):
     return items[:limit]
 
 
+def _defuse_github_refs(text):
+    """Break GitHub cross-reference patterns so they don't ping original issues.
+
+    Replaces owner/repo#NNN and bare #NNN with non-linking equivalents.
+    """
+    import re
+    # owner/repo#123 → owner/repo\u200B#123 (zero-width space breaks the link)
+    text = re.sub(r'(\w+/\w+)#(\d+)', r'\1\u200B#\2', text)
+    # Bare #123 at word boundary → #\u200B123
+    text = re.sub(r'(?<!\w)#(\d+)\b', r'#\u200B\1', text)
+    return text
+
+
 def clone_issue_to_fork(source_repo, source_number, target_repo, source_title, source_body):
     """Create a test issue in the fork repo."""
-    title = f"[TRIAGE TEST #{source_number}] {source_title}"
-    body = source_body + f"\n\n---\nCloned from {source_repo}#{source_number} for triage testing."
+    title = f"[TRIAGE TEST {source_number}] {source_title}"
+    safe_body = _defuse_github_refs(source_body)
+    body = safe_body + f"\n\n---\nCloned from `{source_repo}` issue {source_number} for triage testing."
 
     cmd = [
         "gh", "issue", "create",
@@ -148,7 +162,10 @@ def run_triage_on_issue(repo, issue_number):
         closing_refs = retriever.check_closing_refs(issue_number, repo)
 
         # Filter self-matches (the source issue appears in the index)
-        original_number = int(title.split("#")[1].split("]")[0])
+        # Parse original issue number from "[TRIAGE TEST NNN] ..." title
+        import re
+        m = re.search(r'\[TRIAGE TEST #?(\d+)\]', title)
+        original_number = int(m.group(1)) if m else 0
         # Strip the "[TRIAGE TEST #NNN] " prefix for title overlap calculation
         original_title_clean = title.split("] ", 1)[1] if "] " in title else title
         if similar_issues:
