@@ -114,6 +114,7 @@ def run_triage_on_issue(repo, issue_number):
         # Import triage modules
         from triage.retriever import IssueRetriever
         from triage.prompt_builder import TriageContext, get_triage_builder
+        from triage.confidence import compute_duplicate_confidence
 
         title = issue.get("title", "")
         body = issue.get("body", "") or ""
@@ -148,6 +149,8 @@ def run_triage_on_issue(repo, issue_number):
 
         # Filter self-matches (the source issue appears in the index)
         original_number = int(title.split("#")[1].split("]")[0])
+        # Strip the "[TRIAGE TEST #NNN] " prefix for title overlap calculation
+        original_title_clean = title.split("] ", 1)[1] if "] " in title else title
         if similar_issues:
             similar_issues = [s for s in similar_issues if s.get("issue_number") != original_number]
         if duplicates:
@@ -171,15 +174,27 @@ def run_triage_on_issue(repo, issue_number):
         builder = get_triage_builder()
         prompt = builder.build_triage_prompt(context)
 
-        # Extract duplicate candidates (include even below threshold for report)
+        # Extract duplicate candidates with confidence scores
         duplicate_candidates = []
         if duplicates:
+            has_merged = any(ref.get("pr_merged") for ref in (closing_refs or []))
             for dup in duplicates[:3]:
+                rrf = dup.get("rrf_score", 0.0)
+                candidate_title = dup.get("title", "")
+                title_words_query = set(original_title_clean.lower().split())
+                title_words_cand = set(candidate_title.lower().split())
+                overlap = (
+                    len(title_words_query & title_words_cand) /
+                    len(title_words_query | title_words_cand)
+                    if title_words_query | title_words_cand else 0.0
+                )
+                confidence = compute_duplicate_confidence(rrf, has_merged, overlap)
                 duplicate_candidates.append({
                     "issue_number": dup.get("issue_number", "?"),
-                    "title": dup.get("title", "(unknown)"),
+                    "title": candidate_title,
                     "state": dup.get("state", "?"),
-                    "rrf_score": dup.get("rrf_score", 0.0),
+                    "rrf_score": rrf,
+                    "confidence": confidence,
                 })
 
         # Extract top similar issues for the report
@@ -269,12 +284,12 @@ def generate_report(results, output_path):
             report_lines.extend([
                 "### Duplicate Candidates",
                 "",
-                "| # | Title | State | RRF Score |",
-                "|---|-------|-------|-----------|",
+                "| # | Title | State | RRF Score | Confidence |",
+                "|---|-------|-------|-----------|------------|",
             ])
             for dup in dup_candidates:
                 report_lines.append(
-                    f"| {dup['issue_number']} | {dup['title'][:80]} | {dup['state']} | {dup['rrf_score']:.4f} |"
+                    f"| {dup['issue_number']} | {dup['title'][:80]} | {dup['state']} | {dup['rrf_score']:.4f} | {dup['confidence']:.2f} |"
                 )
             report_lines.append("")
 

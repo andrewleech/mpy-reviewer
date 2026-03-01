@@ -16,14 +16,17 @@ class TriageAction:
 
 
 def compute_duplicate_confidence(
-    similarity_score: float,
+    rrf_score: float,
     has_merged_closing_ref: bool,
     title_overlap: float = 0.0,
 ) -> float:
     """Compute confidence that an issue is a duplicate/resolved.
 
     Args:
-        similarity_score: Semantic similarity score (0-1, from RRF normalized).
+        rrf_score: Reciprocal rank fusion score from hybrid search.
+            With k=60 and 2 sources (dense+FTS), typical range is
+            0.01-0.04. Near-exact duplicates score ~0.035-0.039
+            (after heuristic boosts).
         has_merged_closing_ref: Whether a merged PR explicitly closes this issue.
         title_overlap: Jaccard title word overlap (0-1).
     """
@@ -32,19 +35,19 @@ def compute_duplicate_confidence(
     if has_merged_closing_ref:
         return config.closing_ref_merged_confidence
 
-    # Semantic similarity → confidence mapping
-    if similarity_score >= config.similarity_high:
+    # RRF score → confidence mapping
+    if rrf_score >= config.similarity_high:
         confidence = config.duplicate_high_confidence
-    elif similarity_score >= config.similarity_medium:
+    elif rrf_score >= config.similarity_medium:
         # Linear interpolation between medium and high
-        t = (similarity_score - config.similarity_medium) / (
+        t = (rrf_score - config.similarity_medium) / (
             config.similarity_high - config.similarity_medium
         )
         confidence = config.duplicate_medium_confidence + t * (
             config.duplicate_high_confidence - config.duplicate_medium_confidence
         )
     else:
-        confidence = similarity_score * config.duplicate_medium_confidence / config.similarity_medium
+        confidence = rrf_score * config.duplicate_medium_confidence / config.similarity_medium
 
     # Title overlap bonus
     if title_overlap > 0.3:

@@ -93,11 +93,16 @@ def set_config(config: Config) -> None:
 class TriageConfig:
     """Confidence thresholds and settings for issue triage."""
 
-    # Duplicate detection thresholds
+    # Duplicate detection thresholds (output confidence values)
     duplicate_high_confidence: float = 0.85
     duplicate_medium_confidence: float = 0.60
-    similarity_high: float = 0.90
-    similarity_medium: float = 0.70
+
+    # RRF score thresholds for duplicate detection.
+    # RRF with k=60 and 2 sources (dense+FTS) produces scores in the
+    # 0.01-0.04 range. Near-exact duplicates score ~0.035-0.039 (with
+    # heuristic boosts), closely related issues score ~0.028-0.035.
+    similarity_high: float = 0.035
+    similarity_medium: float = 0.025
 
     # Label confidence thresholds
     label_auto_apply: float = 0.85

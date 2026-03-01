@@ -1,6 +1,6 @@
 # Issue Triage Test Report
 
-Generated: 2026-03-01T12:02:14.397695
+Generated: 2026-03-01T12:25:46.522498
 
 **Issues tested:** 5
 
@@ -24,11 +24,11 @@ Generated: 2026-03-01T12:02:14.397695
 
 ### Duplicate Candidates
 
-| # | Title | State | RRF Score |
-|---|-------|-------|-----------|
-| 6922 | Tests failing on current code, with CPython 3.9.1 | closed | 0.0340 |
-| 18867 | tests: thread stress tests intermittent failures under QEMU (stress_aes, stress_ | open | 0.0318 |
-| 18866 | tests: thread/thread_gc1.py intermittent failure on CI | open | 0.0313 |
+| # | Title | State | RRF Score | Confidence |
+|---|-------|-------|-----------|------------|
+| 6922 | Tests failing on current code, with CPython 3.9.1 | closed | 0.0340 | 0.82 |
+| 18867 | tests: thread stress tests intermittent failures under QEMU (stress_aes, stress_ | open | 0.0318 | 0.77 |
+| 18866 | tests: thread/thread_gc1.py intermittent failure on CI | open | 0.0313 | 0.76 |
 
 ### Related Reviews (5 total)
 
@@ -60,11 +60,11 @@ Generated: 2026-03-01T12:02:14.397695
 
 ### Duplicate Candidates
 
-| # | Title | State | RRF Score |
-|---|-------|-------|-----------|
-| 4839 | esp32 PPP compile errors | closed | 0.0302 |
-| 7329 | build micropython for qemu failed .ports:zephyr | closed | 0.0279 |
-| 4111 | micropython unix fail to build... | closed | 0.0262 |
+| # | Title | State | RRF Score | Confidence |
+|---|-------|-------|-----------|------------|
+| 4839 | esp32 PPP compile errors | closed | 0.0302 | 0.73 |
+| 7329 | build micropython for qemu failed .ports:zephyr | closed | 0.0279 | 0.67 |
+| 4111 | micropython unix fail to build... | closed | 0.0262 | 0.63 |
 
 ### Related Reviews (5 total)
 
@@ -96,11 +96,11 @@ Generated: 2026-03-01T12:02:14.397695
 
 ### Duplicate Candidates
 
-| # | Title | State | RRF Score |
-|---|-------|-------|-----------|
-| 17867 | SEEED_XIAO_NRF52 board access to 1 MB Flash | open | 0.0315 |
-| 17375 | RP2350: Flash clock frequency problem | closed | 0.0304 |
-| 8753 | docs: alternative build options required for `port/rp2` | closed | 0.0295 |
+| # | Title | State | RRF Score | Confidence |
+|---|-------|-------|-----------|------------|
+| 17867 | SEEED_XIAO_NRF52 board access to 1 MB Flash | open | 0.0315 | 0.76 |
+| 17375 | RP2350: Flash clock frequency problem | closed | 0.0304 | 0.73 |
+| 8753 | docs: alternative build options required for `port/rp2` | closed | 0.0295 | 0.71 |
 
 ### Related Reviews (5 total)
 
@@ -132,11 +132,11 @@ Generated: 2026-03-01T12:02:14.397695
 
 ### Duplicate Candidates
 
-| # | Title | State | RRF Score |
-|---|-------|-------|-----------|
-| 11057 | REPL over UART not working on the RP2 port | closed | 0.0387 |
-| 8560 | How can I access non-REPL UART over USB? | open | 0.0317 |
-| 1499 | REPL don't start via UART on CC3200 version | closed | 0.0299 |
+| # | Title | State | RRF Score | Confidence |
+|---|-------|-------|-----------|------------|
+| 11057 | REPL over UART not working on the RP2 port | closed | 0.0387 | 0.90 |
+| 8560 | How can I access non-REPL UART over USB? | open | 0.0317 | 0.77 |
+| 1499 | REPL don't start via UART on CC3200 version | closed | 0.0299 | 0.72 |
 
 ### Related Reviews (5 total)
 
@@ -168,11 +168,11 @@ Generated: 2026-03-01T12:02:14.397695
 
 ### Duplicate Candidates
 
-| # | Title | State | RRF Score |
-|---|-------|-------|-----------|
-| 18024 | rp2/W5100S-EVB-PICO does not seem to send a hostname to DHCP server when getting | open | 0.0323 |
-| 17976 | Setting hostname on Pico W (still) has no effect: no host name is exposed (also  | open | 0.0310 |
-| 17975 | Setting hostname on Pico W (still) has no effect: no host name is exposed (also  | closed | 0.0310 |
+| # | Title | State | RRF Score | Confidence |
+|---|-------|-------|-----------|------------|
+| 18024 | rp2/W5100S-EVB-PICO does not seem to send a hostname to DHCP server when getting | open | 0.0323 | 0.78 |
+| 17976 | Setting hostname on Pico W (still) has no effect: no host name is exposed (also  | open | 0.0310 | 0.75 |
+| 17975 | Setting hostname on Pico W (still) has no effect: no host name is exposed (also  | closed | 0.0310 | 0.75 |
 
 ### Related Reviews (5 total)
 

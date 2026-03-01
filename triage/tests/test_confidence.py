@@ -14,38 +14,43 @@ def default_config():
 
 
 class TestComputeDuplicateConfidence:
+    """Tests use RRF-scale scores (0.01-0.04 range, k=60, 2 sources)."""
+
     @patch("triage.confidence.get_triage_config")
     def test_merged_closing_ref_gives_high_confidence(self, mock_config):
         mock_config.return_value = TriageConfig()
         confidence = compute_duplicate_confidence(
-            similarity_score=0.5,
+            rrf_score=0.02,
             has_merged_closing_ref=True,
         )
         assert confidence == 0.95
 
     @patch("triage.confidence.get_triage_config")
-    def test_high_similarity_gives_high_confidence(self, mock_config):
+    def test_high_rrf_gives_high_confidence(self, mock_config):
         mock_config.return_value = TriageConfig()
+        # Near-exact duplicate: RRF ~0.038
         confidence = compute_duplicate_confidence(
-            similarity_score=0.95,
+            rrf_score=0.038,
             has_merged_closing_ref=False,
         )
         assert confidence >= 0.85
 
     @patch("triage.confidence.get_triage_config")
-    def test_medium_similarity_gives_medium_confidence(self, mock_config):
+    def test_medium_rrf_gives_medium_confidence(self, mock_config):
         mock_config.return_value = TriageConfig()
+        # Related issue: RRF ~0.030
         confidence = compute_duplicate_confidence(
-            similarity_score=0.75,
+            rrf_score=0.030,
             has_merged_closing_ref=False,
         )
         assert 0.6 <= confidence < 0.85
 
     @patch("triage.confidence.get_triage_config")
-    def test_low_similarity_gives_low_confidence(self, mock_config):
+    def test_low_rrf_gives_low_confidence(self, mock_config):
         mock_config.return_value = TriageConfig()
+        # Loosely related: RRF ~0.018
         confidence = compute_duplicate_confidence(
-            similarity_score=0.3,
+            rrf_score=0.018,
             has_merged_closing_ref=False,
         )
         assert confidence < 0.6
@@ -53,8 +58,8 @@ class TestComputeDuplicateConfidence:
     @patch("triage.confidence.get_triage_config")
     def test_title_overlap_boosts_confidence(self, mock_config):
         mock_config.return_value = TriageConfig()
-        base = compute_duplicate_confidence(0.8, False, title_overlap=0.0)
-        boosted = compute_duplicate_confidence(0.8, False, title_overlap=0.5)
+        base = compute_duplicate_confidence(0.030, False, title_overlap=0.0)
+        boosted = compute_duplicate_confidence(0.030, False, title_overlap=0.5)
         assert boosted > base
 
 
