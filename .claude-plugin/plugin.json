@@ -1,7 +1,7 @@
 {
   "name": "mpy-reviewer",
   "description": "MicroPython code review assistant backed by 18,614 categorized review comments",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": { "name": "Andrew Leech" },
   "homepage": "https://github.com/andrewleech/mpy-reviewer",
   "repository": "https://github.com/andrewleech/mpy-reviewer",
