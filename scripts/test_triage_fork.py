@@ -69,10 +69,11 @@ def _defuse_github_refs(text):
     Replaces owner/repo#NNN and bare #NNN with non-linking equivalents.
     """
     import re
-    # owner/repo#123 → owner/repo\u200B#123 (zero-width space breaks the link)
-    text = re.sub(r'(\w+/\w+)#(\d+)', r'\1\u200B#\2', text)
-    # Bare #123 at word boundary → #\u200B123
-    text = re.sub(r'(?<!\w)#(\d+)\b', r'#\u200B\1', text)
+    ZWS = '\u200B'  # zero-width space breaks GitHub auto-linking
+    # owner/repo#123 → owner/repo[ZWS]#123
+    text = re.sub(r'(\w+/\w+)#(\d+)', rf'\1{ZWS}#\2', text)
+    # Bare #123 at word boundary → #[ZWS]123
+    text = re.sub(r'(?<!\w)#(\d+)\b', rf'#{ZWS}\1', text)
     return text
 
 
