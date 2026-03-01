@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 from fastmcp import FastMCP
@@ -34,6 +35,79 @@ mcp = FastMCP(
         "tone. Use get_pr_review_history to see full review threads for a PR."
     ),
 )
+
+# --- Idle timeout for shared SSE mode ---
+#
+# Tracks both tool-call activity AND active SSE connections. The server
+# shuts down only when the idle timeout expires AND there are zero active
+# connections. This prevents killing the server while a session is
+# connected but the user is thinking/reading.
+
+_IDLE_TIMEOUT = int(os.environ.get("MPY_REVIEWER_IDLE_TIMEOUT", "1800"))  # 30 min default
+_idle_timer: threading.Timer | None = None
+_idle_lock = threading.Lock()
+_idle_enabled = False  # Set to True only for SSE transport (not stdio/bot)
+_active_connections = 0  # SSE connection count
+
+
+def _touch_activity() -> None:
+    """Reset the idle shutdown timer on any tool call or connection change."""
+    global _idle_timer
+    if not _idle_enabled:
+        return
+    with _idle_lock:
+        if _idle_timer is not None:
+            _idle_timer.cancel()
+        _idle_timer = threading.Timer(_IDLE_TIMEOUT, _idle_shutdown)
+        _idle_timer.daemon = True
+        _idle_timer.start()
+
+
+def _connection_opened() -> None:
+    """Track a new SSE connection."""
+    global _active_connections
+    with _idle_lock:
+        _active_connections += 1
+    _touch_activity()
+    logger.info("SSE connection opened (active: %d)", _active_connections)
+
+
+def _connection_closed() -> None:
+    """Track an SSE connection closing."""
+    global _active_connections
+    with _idle_lock:
+        _active_connections = max(0, _active_connections - 1)
+    _touch_activity()
+    logger.info("SSE connection closed (active: %d)", _active_connections)
+
+
+def _idle_shutdown() -> None:
+    """Shut down the server after idle timeout, if no active connections."""
+    with _idle_lock:
+        if _active_connections > 0:
+            # Still have connected clients — restart the timer
+            logger.info("Idle timeout reached but %d connections active, deferring",
+                        _active_connections)
+    if _active_connections > 0:
+        _touch_activity()
+        return
+
+    logger.info("Idle timeout (%ds) reached with 0 connections, shutting down", _IDLE_TIMEOUT)
+    from pathlib import Path
+    lock_file = Path.home() / ".cache" / "mpy-reviewer" / "server.lock"
+    try:
+        lock_file.unlink(missing_ok=True)
+    except OSError:
+        pass
+    os._exit(0)
+
+
+def _start_idle_timer() -> None:
+    """Enable and start the idle timer (called once at SSE server startup)."""
+    global _idle_enabled
+    _idle_enabled = True
+    _touch_activity()
+
 
 # Lazy-loaded singletons — survive across tool calls within a session
 _retriever = None
@@ -92,6 +166,9 @@ def review_diff(
     diff_text: str,
     top_k: int = 8,
     include_codebase: bool = False,
+    commit_messages: list[str] | None = None,
+    pr_title: str | None = None,
+    pr_body: str | None = None,
 ) -> str:
     """Review a code diff using historical MicroPython review patterns.
 
@@ -107,11 +184,15 @@ def review_diff(
         diff_text: Unified diff text to review.
         top_k: Number of review examples to retrieve (default 8).
         include_codebase: Include MicroPython codebase context (slower).
+        commit_messages: Optional list of commit messages for context.
+        pr_title: Optional PR title for context.
+        pr_body: Optional PR description/body for context.
 
     Returns:
         Markdown orchestration prompt (~5-8K chars) with a summary table
         of temp files, the style guide, and workflow instructions.
     """
+    _touch_activity()
     t0 = time.monotonic()
     logger.info("review_diff: starting (top_k=%d, include_codebase=%s, diff_len=%d)",
                 top_k, include_codebase, len(diff_text))
@@ -149,6 +230,9 @@ def review_diff(
     prompt = builder.build_orchestration_prompt(
         file_infos=file_infos,
         files_changed=files_changed,
+        commit_messages=commit_messages,
+        pr_title=pr_title,
+        pr_body=pr_body,
         codebase_context=codebase_context,
     )
 
@@ -177,6 +261,7 @@ def review_pr(
     Returns:
         Markdown orchestration prompt with file paths and style guide.
     """
+    _touch_activity()
     t0 = time.monotonic()
     logger.info("review_pr: starting PR #%d (top_k=%d, include_codebase=%s)",
                 pr_number, top_k, include_codebase)
@@ -196,6 +281,30 @@ def review_pr(
 
     logger.info("review_pr: fetched diff (%d chars, %.1fs)",
                 len(diff_text), time.monotonic() - t0)
+
+    # Fetch PR metadata (title, body, commit messages)
+    pr_title = None
+    pr_body = None
+    commit_messages = None
+    try:
+        meta_result = subprocess.run(
+            ["gh", "pr", "view", str(pr_number), "--repo", repo,
+             "--json", "title,body,commits"],
+            capture_output=True, text=True,
+        )
+        if meta_result.returncode == 0:
+            meta = json.loads(meta_result.stdout)
+            pr_title = meta.get("title")
+            pr_body = meta.get("body")
+            commits = meta.get("commits", [])
+            if commits:
+                commit_messages = [
+                    c.get("messageHeadline", "") for c in commits
+                    if c.get("messageHeadline")
+                ]
+            logger.info("review_pr: fetched metadata (%.1fs)", time.monotonic() - t0)
+    except Exception as e:
+        logger.warning("review_pr: metadata fetch failed: %s", e)
 
     retriever = _get_retriever()
     builder = _get_builder()
@@ -231,6 +340,9 @@ def review_pr(
         file_infos=file_infos,
         files_changed=files_changed,
         pr_number=pr_number,
+        pr_title=pr_title,
+        pr_body=pr_body,
+        commit_messages=commit_messages,
         codebase_context=codebase_context,
     )
 
@@ -272,6 +384,7 @@ def search_reviews(
     Returns:
         Dict with 'results' list and 'count'.
     """
+    _touch_activity()
     retriever = _get_retriever()
     results = retriever.search_with_filters(
         query,
@@ -314,6 +427,7 @@ def find_style_examples(
     Returns:
         Dict with 'results' list and 'count'.
     """
+    _touch_activity()
     retriever = _get_retriever()
 
     if query:
@@ -342,6 +456,7 @@ def get_review_stats() -> dict:
     Returns:
         Dict with index statistics.
     """
+    _touch_activity()
     from rag.indexer import index_stats
     return index_stats()
 
@@ -365,6 +480,7 @@ def get_pr_review_history(
     Returns:
         Dict with 'threads' (grouped by reply chain), 'pr_info', and 'comment_count'.
     """
+    _touch_activity()
     from rag.graph_expander import get_pr_review_context
     return get_pr_review_context(pr_number, max_comments=max_comments, repo=repo)
 
@@ -416,6 +532,7 @@ def triage_issue(
     Returns:
         Markdown triage prompt with similar issues, closing refs, and style guide.
     """
+    _touch_activity()
     t0 = time.monotonic()
     logger.info("triage_issue: starting #%d (top_k=%d, include_codebase=%s)",
                 issue_number, top_k, include_codebase)
@@ -521,6 +638,7 @@ def search_issues(
     Returns:
         Dict with 'results' list and 'count'.
     """
+    _touch_activity()
     retriever = _get_triage_retriever()
     results = retriever.search_similar_issues(
         query, top_k=top_k, state=state, component=component, port=port,
@@ -599,5 +717,30 @@ if __name__ == "__main__":
     if args.transport != "stdio":
         kwargs["host"] = args.host
         kwargs["port"] = args.port
+
+    # Enable idle timeout for SSE transport (shared server mode),
+    # unless bot mode is active (bot manages its own lifecycle).
+    if args.transport != "stdio" and not os.environ.get("MPY_REVIEWER_BOT_MODE"):
+        _start_idle_timer()
+        logger.info("Idle timeout enabled: %ds", _IDLE_TIMEOUT)
+
+        # Add middleware to track client connections via MCP initialize/message
+        from fastmcp.server.middleware import Middleware
+
+        class ConnectionTracker(Middleware):
+            """Track MCP client sessions for idle timeout."""
+            _sessions: set = set()
+
+            async def on_initialize(self, context, call_next):
+                session_id = id(context)
+                ConnectionTracker._sessions.add(session_id)
+                _connection_opened()
+                return await call_next(context)
+
+            async def on_call_tool(self, context, call_next):
+                _touch_activity()
+                return await call_next(context)
+
+        mcp.add_middleware(ConnectionTracker())
 
     mcp.run(transport=args.transport, **kwargs)

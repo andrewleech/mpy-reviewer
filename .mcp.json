@@ -2,7 +2,7 @@
   "mpy-reviewer": {
     "type": "stdio",
     "command": "uv",
-    "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "python", "${CLAUDE_PLUGIN_ROOT}/mcp_server.py"],
+    "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "python", "${CLAUDE_PLUGIN_ROOT}/mcp_proxy.py"],
     "env": {
       "PYTHONPATH": "${CLAUDE_PLUGIN_ROOT}"
     }

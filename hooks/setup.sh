@@ -29,10 +29,13 @@ if ! command -v uv &>/dev/null; then
     exit 1
 fi
 
-if ! uv run --project "$PLUGIN_ROOT" python -c "import rag" 2>/dev/null; then
-    echo "Installing mpy-reviewer package via uv..."
-    uv sync --project "$PLUGIN_ROOT"
+# Remove stale venv copied from dev repo (uv uses .venv/)
+if [ -d "$PLUGIN_ROOT/venv" ] && [ "$PLUGIN_ROOT" != "." ]; then
+    rm -rf "$PLUGIN_ROOT/venv"
 fi
+
+echo "Syncing mpy-reviewer dependencies..."
+uv sync --project "$PLUGIN_ROOT" 2>&1
 
 # --- codanna (semantic code search) ---
 

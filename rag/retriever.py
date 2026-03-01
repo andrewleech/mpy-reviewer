@@ -296,6 +296,55 @@ class ReviewRetriever:
 
         return results
 
+    def _search_per_file(
+        self,
+        diff_text: str,
+        top_k_rerank: int,
+    ) -> List[Dict[str, Any]]:
+        """Split diff by file, search per-file, merge via two-stage RRF.
+
+        For single-file diffs, falls back to a single search_hybrid call.
+        For multi-file diffs, allocates candidates proportional to each
+        file's changed-line count, then merges per-file results.
+        """
+        from .codebase import split_diff_by_file
+
+        file_chunks = split_diff_by_file(diff_text)
+
+        # Single file or unsplittable: use existing single-query path
+        if len(file_chunks) <= 1:
+            config = get_config()
+            return self.search_hybrid(
+                diff_text,
+                top_k_initial=config.top_k_initial,
+                top_k_final=top_k_rerank,
+            )
+
+        # Multi-file: allocate candidates proportional to diff size
+        total_changed = sum(f["changed_lines"] for f in file_chunks)
+        config = get_config()
+
+        per_file_fused = []
+        for fc in file_chunks:
+            weight = fc["changed_lines"] / total_changed
+            file_k = max(10, round(weight * config.top_k_initial))
+
+            # Per-file hybrid search (dense + FTS, fused internally)
+            file_results = self.search_hybrid(
+                fc["chunk"],
+                top_k_initial=file_k,
+                top_k_final=file_k,
+            )
+            if file_results:
+                per_file_fused.append(file_results)
+
+        if not per_file_fused:
+            return []
+
+        # Cross-file RRF merge
+        merged = self._reciprocal_rank_fusion(per_file_fused, k=60)
+        return merged[:top_k_rerank]
+
     def get_similar_reviews(
         self,
         diff_text: str,
@@ -316,11 +365,7 @@ class ReviewRetriever:
         """
         config = get_config()
 
-        results = self.search_hybrid(
-            diff_text,
-            top_k_initial=config.top_k_initial,
-            top_k_final=config.top_k_rerank,
-        )
+        results = self._search_per_file(diff_text, config.top_k_rerank)
 
         # --- Heuristic score adjustments ---
 

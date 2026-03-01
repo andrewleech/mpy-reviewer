@@ -160,6 +160,9 @@ def search(
 @click.option("--rerank", is_flag=True, help="Use cross-encoder re-ranking")
 @click.option("--codebase", is_flag=True, help="Include codebase context")
 @click.option("--output", type=click.Choice(["context", "prompt", "json"]), default="context")
+@click.option("-m", "--commit-message", "commit_messages", multiple=True, help="Commit message (repeatable)")
+@click.option("--pr-title", help="PR title")
+@click.option("--pr-body", help="PR body/description")
 @click.pass_context
 def review(
     ctx,
@@ -171,6 +174,9 @@ def review(
     rerank: bool,
     codebase: bool,
     output: str,
+    commit_messages: tuple,
+    pr_title: Optional[str],
+    pr_body: Optional[str],
 ):
     """Generate review context for a code diff.
 
@@ -208,6 +214,16 @@ def review(
         if not diff_text:
             click.echo("Error: Empty diff", err=True)
             sys.exit(1)
+
+        # Auto-fetch PR metadata when reviewing by number
+        if pr_number and not (pr_title or pr_body or commit_messages):
+            pr_title, pr_body, commit_messages = _fetch_pr_metadata(pr_number, repo=repo)
+
+        # Normalize commit_messages: empty tuple → None
+        if not commit_messages:
+            commit_messages = None
+        else:
+            commit_messages = list(commit_messages)
 
         # Extract file list from diff for file-path affinity
         from .codebase import extract_diff_file_paths
@@ -257,7 +273,10 @@ def review(
                 review_examples=results[:top_k],
                 codebase_context=codebase_context,
                 pr_number=pr_number,
+                pr_title=pr_title,
+                pr_body=pr_body,
                 files_changed=files_changed,
+                commit_messages=commit_messages,
             )
             builder = get_builder()
             prompt = builder.build_review_prompt(context)
@@ -290,6 +309,38 @@ def _fetch_pr_diff(pr_number: int, repo: str = "micropython/micropython") -> str
         sys.exit(1)
 
     return result.stdout
+
+
+def _fetch_pr_metadata(
+    pr_number: int, repo: str = "micropython/micropython",
+) -> tuple:
+    """Fetch PR title, body, and commit messages from GitHub.
+
+    Returns (title, body, commit_messages) tuple. Any field may be None on failure.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "view", str(pr_number), "--repo", repo,
+             "--json", "title,body,commits"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return None, None, None
+        meta = json.loads(result.stdout)
+        title = meta.get("title")
+        body = meta.get("body")
+        commits = meta.get("commits", [])
+        commit_messages = None
+        if commits:
+            commit_messages = [
+                c.get("messageHeadline", "") for c in commits
+                if c.get("messageHeadline")
+            ]
+        return title, body, commit_messages
+    except Exception:
+        return None, None, None
 
 
 @cli.group()

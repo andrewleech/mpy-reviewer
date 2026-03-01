@@ -578,6 +578,44 @@ def extract_diff_file_paths(diff_text: str) -> List[str]:
     return sorted(paths)
 
 
+def split_diff_by_file(diff_text: str) -> List[Dict[str, Any]]:
+    """Split unified diff into per-file chunks with line-change counts.
+
+    Returns list of {path: str, chunk: str, changed_lines: int},
+    sorted by path.
+    """
+    # Split on diff --git boundaries (lookahead keeps the delimiter)
+    chunks = re.split(r"(?=^diff --git )", diff_text, flags=re.MULTILINE)
+
+    results = []
+    for chunk in chunks:
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+
+        # Extract path from the diff --git header
+        m = re.match(r"^diff --git a/(.+?) b/", chunk)
+        if not m:
+            continue
+        path = m.group(1)
+
+        # Count changed lines: lines starting with + or - but not +++ or ---
+        changed = 0
+        for line in chunk.split("\n"):
+            if (line.startswith("+") and not line.startswith("+++")) or \
+               (line.startswith("-") and not line.startswith("---")):
+                changed += 1
+
+        results.append({
+            "path": path,
+            "chunk": chunk,
+            "changed_lines": max(changed, 1),  # floor at 1 to avoid zero-weight
+        })
+
+    results.sort(key=lambda x: x["path"])
+    return results
+
+
 def get_code_context(diff_text: str, top_k: int = 5) -> Dict[str, Any]:
     """Convenience function to get code context for a diff."""
     retriever = get_codebase_retriever()

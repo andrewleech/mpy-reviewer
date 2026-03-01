@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -20,8 +20,9 @@ class ReviewContext:
     codebase_context: Optional[Dict[str, Any]] = None
     pr_number: Optional[int] = None
     pr_title: Optional[str] = None
+    pr_body: Optional[str] = None
     files_changed: Optional[List[str]] = None
-    commit_message: Optional[str] = None
+    commit_messages: Optional[List[str]] = field(default=None)
 
 
 # Data-driven style guide extracted from 18,614 categorized review comments.
@@ -268,20 +269,22 @@ class PromptBuilder:
             lines.append(f"## PR #{context.pr_number}")
             if context.pr_title:
                 lines.append(f"Title: {context.pr_title}")
+            if context.pr_body:
+                body = context.pr_body
+                if len(body) > 2000:
+                    body = body[:2000] + "\n... (truncated)"
+                lines.append(f"\nDescription:\n{body}")
             if context.files_changed:
                 lines.append(f"Files changed: {', '.join(context.files_changed)}")
-            if context.commit_message:
-                lines.append(f"\nCommit message:\n> {context.commit_message}")
+            if context.commit_messages:
+                lines.append("\nCommit messages:")
+                for msg in context.commit_messages:
+                    lines.append(f"- {msg}")
             lines.append("")
 
         lines.append("## Diff\n")
         lines.append("```diff")
-        diff = context.diff_text
-        if len(diff) > 5000:
-            lines.append(diff[:5000])
-            lines.append("\n... (diff truncated for length)")
-        else:
-            lines.append(diff)
+        lines.append(context.diff_text)
         lines.append("```")
 
         return "\n".join(lines)
@@ -446,6 +449,9 @@ filler or compliments."""
         file_infos: List[Dict[str, Any]],
         files_changed: Optional[List[str]] = None,
         pr_number: Optional[int] = None,
+        pr_title: Optional[str] = None,
+        pr_body: Optional[str] = None,
+        commit_messages: Optional[List[str]] = None,
         codebase_context: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Build a compact orchestration prompt with file paths and style guide.
@@ -457,6 +463,9 @@ filler or compliments."""
             file_infos: List of dicts from write_example_files.
             files_changed: File paths from the diff (for reference).
             pr_number: PR number if reviewing a PR.
+            pr_title: PR title.
+            pr_body: PR description/body.
+            commit_messages: List of commit messages.
             codebase_context: Optional codebase context dict.
         """
         sections = []
@@ -465,8 +474,19 @@ filler or compliments."""
 
         if pr_number:
             sections.append(f"\nReviewing PR #{pr_number}")
+        if pr_title:
+            sections.append(f"Title: {pr_title}")
+        if pr_body:
+            body = pr_body
+            if len(body) > 2000:
+                body = body[:2000] + "\n... (truncated)"
+            sections.append(f"\nDescription:\n{body}")
         if files_changed:
             sections.append(f"\nFiles in diff: {', '.join(files_changed)}")
+        if commit_messages:
+            sections.append("\nCommit messages:")
+            for msg in commit_messages:
+                sections.append(f"- {msg}")
 
         # Example summary table
         sections.append("")
