@@ -8,6 +8,5 @@
   "license": "MIT",
   "keywords": ["micropython", "code-review", "rag"],
   "skills": "./skills/",
-  "hooks": "./hooks/hooks.json",
   "mcpServers": "./.mcp.json"
 }
