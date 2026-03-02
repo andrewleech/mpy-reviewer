@@ -10,6 +10,8 @@ This skill provides AI-assisted code review for MicroPython using historical rev
 
 **Note:** When the `mpy-reviewer` MCP server is available (registered in `.claude/settings.json`), prefer using MCP tools directly (`review_diff`, `search_reviews`, etc.) instead of the CLI. The MCP server keeps the embedding model warm across calls, eliminating 2-3s cold start per query. This skill remains as a fallback for sessions outside the project scope.
 
+**IMPORTANT: The `review_diff` MCP tool accepts diffs of any size.** Do NOT fall back to CLI because a diff seems "too large". Pass the full diff text directly as the `diff_text` parameter regardless of length. The tool internally splits multi-file diffs into per-file chunks for embedding, so large diffs are handled efficiently.
+
 **MCP file-based output:** The MCP `review_diff` and `review_pr` tools return a compact orchestration prompt (~5-8K) instead of raw data. Review examples are written to individual temp files under `/tmp/mpy-review-*/`. The prompt includes a summary table with file paths, sizes, severities, and domains. To use the examples:
 - Read small files (<2KB) directly with the Read tool
 - For large files (>2KB), consider spawning subagents to process them in parallel
