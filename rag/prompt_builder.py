@@ -121,6 +121,13 @@ Before analysing individual hunks, perform these checks:
    with new features, or is so large that a human reviewer would struggle to
    evaluate it in one sitting, suggest breaking it into smaller, focused PRs.
 
+## Using Provided Metadata
+
+Commit messages, PR title, and PR description are provided separately from the
+diff when available. Use this metadata to understand the author's intent. Do NOT
+flag requirements (Signed-off-by, PR template fields, etc.) as missing if they
+are satisfied in the provided metadata — diffs never contain commit trailers.
+
 ## Suggested Fixes
 
 When the fix is obvious (renaming, typos, wrong operator, missing keyword, style
