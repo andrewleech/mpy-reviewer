@@ -318,3 +318,25 @@ async def test_run_review_allowed_tools_include_ci():
     assert "mcp__mpy-reviewer__get_check_runs" in tools_str
     assert "mcp__mpy-reviewer__get_check_run_annotations" in tools_str
     assert "mcp__mpy-reviewer__get_workflow_run_log" in tools_str
+
+
+@pytest.mark.asyncio
+async def test_run_review_allowed_tools_include_verify():
+    """Verify verify_findings is in the --allowedTools list."""
+    auth = MagicMock()
+    auth.get_token.return_value = "tok"
+    captured_cmd = None
+
+    with _mock_run_review_env() as mock_proc:
+        async def capture_exec(*args, **kwargs):
+            nonlocal captured_cmd
+            captured_cmd = args
+            return mock_proc
+        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+            await run_review(make_review_request(), _make_config(), auth=auth)
+
+    assert captured_cmd is not None
+    cmd_list = list(captured_cmd)
+    idx = cmd_list.index("--allowedTools")
+    tools_str = cmd_list[idx + 1]
+    assert "mcp__mpy-reviewer__verify_findings" in tools_str

@@ -133,6 +133,7 @@ async def run_review(
             "mcp__mpy-reviewer__find_style_examples",
             "mcp__mpy-reviewer__get_review_stats",
             "mcp__mpy-reviewer__get_pr_review_history",
+            "mcp__mpy-reviewer__verify_findings",
             "mcp__mpy-reviewer__create_review",
             "mcp__mpy-reviewer__add_review_comment",
             "mcp__mpy-reviewer__submit_review",

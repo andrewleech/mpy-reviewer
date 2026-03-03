@@ -243,6 +243,14 @@ def test_annotate_diff_hunk_header_with_function_context():
     assert "R44  " in lines[6]
 
 
+def test_system_prompt_includes_verification_workflow():
+    prompt = build_system_prompt()
+    assert "verify_findings" in prompt
+    assert "structured findings" in prompt
+    assert "Building the findings array" in prompt
+    assert "Verification step" in prompt
+
+
 def test_build_user_message_contains_line_annotations():
     """build_user_message output includes L/R prefixes in the diff."""
     diff = (

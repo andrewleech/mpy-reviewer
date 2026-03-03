@@ -5,6 +5,7 @@ Tools are designed for iterative use during a review session — call search_rev
 multiple times with different queries, drill into PR history, etc.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -483,6 +484,81 @@ def get_pr_review_history(
     _touch_activity()
     from rag.graph_expander import get_pr_review_context
     return get_pr_review_context(pr_number, max_comments=max_comments, repo=repo)
+
+
+@mcp.tool()
+async def verify_findings(
+    findings: list[dict],
+    diff_text: str,
+    pr_number: int | None = None,
+    repo: str = "micropython/micropython",
+) -> str:
+    """Cross-check review findings against the actual codebase.
+
+    Each finding is verified independently by a dedicated claude -p subprocess
+    with access to codanna, the filesystem, gh CLI, and historical review
+    precedent from the RAG database.
+
+    Call this after generating structured findings from a review_diff/review_pr
+    session. Findings that are false positives (e.g. pattern matches existing
+    convention) are flagged so the caller can drop or adjust them.
+
+    Args:
+        findings: JSON array of structured findings. Each must have:
+            file (str), line (int), severity (str), description (str),
+            diff_hunk (str).
+        diff_text: The full unified diff being reviewed.
+        pr_number: Optional PR number for GitHub context.
+        repo: Repository slug (default: micropython/micropython).
+
+    Returns:
+        Markdown orchestration prompt with verdict summary table and
+        paths to per-finding verdict files under /tmp/mpy-verify-*/.
+    """
+    _touch_activity()
+    t0 = time.monotonic()
+    logger.info(
+        "verify_findings: starting (%d findings, pr=%s)",
+        len(findings), pr_number,
+    )
+
+    from rag.verifier import REQUIRED_FINDING_FIELDS, verify_all_findings
+
+    # Validate finding fields
+    for i, f in enumerate(findings):
+        missing = [k for k in REQUIRED_FINDING_FIELDS if k not in f]
+        if missing:
+            return (
+                f"Error: finding #{i} is missing required fields: {', '.join(missing)}. "
+                f"Each finding must have: {', '.join(REQUIRED_FINDING_FIELDS)}"
+            )
+
+    retriever = _get_retriever()
+
+    # Determine cwd (MicroPython checkout)
+    cwd = os.environ.get("MPY_CHECKOUT", "/workspace/micropython")
+
+    # Build env
+    env = os.environ.copy()
+    config_dir = os.environ.get("MPY_REVIEWER_CLAUDE_CONFIG_DIR")
+    if config_dir:
+        env["CLAUDE_CONFIG_DIR"] = config_dir
+
+    prompt, file_infos = await verify_all_findings(
+        findings=findings,
+        diff_text=diff_text,
+        pr_number=pr_number,
+        repo=repo,
+        retriever=retriever,
+        cwd=cwd,
+        env=env,
+    )
+
+    logger.info(
+        "verify_findings: complete (%d verdicts, %.1fs)",
+        len(file_infos), time.monotonic() - t0,
+    )
+    return prompt
 
 
 # --- Issue triage tools ---

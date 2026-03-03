@@ -231,6 +231,59 @@ Returns a complete prompt containing:
 ### JSON Output (--output json)
 Returns structured data. Parse and present relevant fields to user.
 
+## Two-Step Verification Workflow
+
+After generating findings, use the `verify_findings` MCP tool to cross-check each
+finding against the actual codebase before presenting results. This reduces false
+positives caused by pattern-matching without context.
+
+### Structured Finding Format
+
+Findings must be formatted as a JSON array:
+```json
+[
+  {
+    "file": "extmod/asyncio/stream.py",
+    "line": 42,
+    "severity": "blocking",
+    "description": "POLLHUP not handled in ioctl bitmask",
+    "diff_hunk": "the relevant diff hunk text"
+  }
+]
+```
+
+### verify_findings Tool
+
+```
+verify_findings(findings, diff_text, pr_number=None, repo="micropython/micropython")
+```
+
+- `findings`: JSON array of structured findings (format above)
+- `diff_text`: the full unified diff being reviewed
+- `pr_number`: optional PR number
+- `repo`: repository slug
+
+Returns a markdown orchestration prompt with a summary table and paths to
+per-finding verdict files under `/tmp/mpy-verify-*/`.
+
+### Verdict Types
+
+- **confirmed**: finding is valid; keep as-is (or with adjusted severity)
+- **partially_valid**: finding has merit but needs adjustment; update severity/description
+- **false_positive**: finding is wrong; drop it from the review
+- **inconclusive**: verification could not determine validity; use your judgment
+
+### Verification Workflow
+
+1. Generate diff (git diff, git show, etc.)
+2. Call `review_diff` to get examples and style context
+3. Read examples and analyze the diff
+4. Assemble findings as a JSON array
+5. Call `verify_findings(findings, diff_text)` to cross-check
+6. Read verdict files for evidence
+7. Drop false positives, adjust partially valid findings
+8. Present verified findings as the final review
+
 ## Workflow Examples
 
 ### Example 1: User Wants General Review

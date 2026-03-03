@@ -66,7 +66,7 @@ class AuthorizationConfig:
 @dataclass
 class ReviewConfig:
     model: str = "sonnet"
-    timeout_seconds: int = 600
+    timeout_seconds: int = 900  # Increased to accommodate verify_findings round-trip (~300s)
     top_k: int = 8
     include_codebase: bool = True
     check_ci: bool = True

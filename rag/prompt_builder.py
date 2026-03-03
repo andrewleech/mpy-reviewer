@@ -539,16 +539,29 @@ past review examples with their original code context (diff hunks).
   project diff against each reference file in parallel
 - Locate and read `CODECONVENTIONS.md` at the MicroPython repo root
 - Locate and read `.github/pull_request_template.md` to check the PR description
-- Assemble individual findings into a final review
+- Assemble individual findings as a JSON array (see format below)
+- Call `verify_findings` with the findings + diff to cross-check them
+- Read the verdict files and drop false positives, adjust severities
+- Present the verified findings as the final review
 
 ## Your Task
 
 Review the code diff in dpgeorge's style. Be direct, technical, and concise.
 
-For each issue found, provide:
-1. The file and line/hunk reference
-2. Severity: **Blocking** / **Suggestion** / **Nitpick**
-3. The feedback itself — terse for nitpicks, detailed for blocking issues
+For each issue found, format as a structured finding:
+```json
+{"file": "path/to/file", "line": 42, "severity": "blocking",
+ "description": "The finding text", "diff_hunk": "relevant hunk"}
+```
+
+After assembling all findings, call `verify_findings(findings, diff_text)`
+to cross-check them against the codebase. Read the verdict files returned,
+then present only the confirmed/adjusted findings.
+
+Severity levels:
+- **Blocking**: must fix before merge (correctness bugs, missing error handling)
+- **Suggestion**: recommended improvement (better patterns, cleaner API)
+- **Nitpick**: minor style/consistency (blank lines, naming, sorting)
 
 Prioritize:
 - Correctness: logic bugs, edge cases, error handling
