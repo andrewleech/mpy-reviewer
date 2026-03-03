@@ -543,7 +543,12 @@ async def verify_findings(
     retriever = _get_retriever()
 
     # Determine cwd (MicroPython checkout)
-    cwd = os.environ.get("MPY_CHECKOUT", "/workspace/micropython")
+    # CLAUDE_PROJECT_DIR is set by Claude Code to the user's project directory
+    cwd = (
+        os.environ.get("MPY_CHECKOUT")
+        or os.environ.get("CLAUDE_PROJECT_DIR")
+        or "/workspace/micropython"
+    )
 
     # Build env
     env = os.environ.copy()
