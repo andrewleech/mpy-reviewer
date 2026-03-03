@@ -5,18 +5,23 @@ actual codebase using codanna, filesystem access, and the review database.
 """
 
 import asyncio
+import glob as globmod
 import json
 import logging
 import os
 import re
 import shutil
 import tempfile
+import time
 
 logger = logging.getLogger(__name__)
 
 VERIFICATION_TIMEOUT = 300
 VERIFICATION_MODEL = "sonnet"
 MAX_BUDGET_USD = "0.50"
+MAX_FINDINGS = 15
+MAX_PARALLEL_VERIFIERS = 4
+_STALE_TMPDIR_AGE = 3600  # 1 hour
 
 VERDICT_SCHEMA = {
     "type": "object",
@@ -40,6 +45,33 @@ VERDICT_SCHEMA = {
 }
 
 REQUIRED_FINDING_FIELDS = ("file", "line", "severity", "description", "diff_hunk")
+
+_VALID_VERDICTS = {"confirmed", "partially_valid", "false_positive", "inconclusive"}
+_REQUIRED_VERDICT_KEYS = {"verdict", "evidence", "adjusted_severity", "confidence"}
+
+
+def _validate_verdict(d: dict, index: int) -> dict | None:
+    """Return the dict if it looks like a valid verdict, else None."""
+    if not isinstance(d, dict):
+        return None
+    if not _REQUIRED_VERDICT_KEYS.issubset(d.keys()):
+        return None
+    if d.get("verdict") not in _VALID_VERDICTS:
+        return None
+    return d
+
+
+def _cleanup_stale_tmpdirs(base: str | None) -> None:
+    """Remove mpy-verify-* directories older than _STALE_TMPDIR_AGE."""
+    parent = base or tempfile.gettempdir()
+    now = time.time()
+    for path in globmod.glob(os.path.join(parent, "mpy-verify-*")):
+        try:
+            if os.path.isdir(path) and (now - os.path.getmtime(path)) > _STALE_TMPDIR_AGE:
+                shutil.rmtree(path, ignore_errors=True)
+                logger.debug("Cleaned up stale verify dir: %s", path)
+        except OSError:
+            pass
 
 
 def build_verification_system_prompt() -> str:
@@ -231,21 +263,32 @@ async def run_single_verification(
             return inconclusive
 
         # Extract structured_output (same pattern as judge.py)
+        extracted = None
         if isinstance(output, dict) and "structured_output" in output:
             structured = output["structured_output"]
             if isinstance(structured, dict):
-                structured["finding_index"] = index
-                return structured
+                extracted = structured
 
-        if isinstance(output, dict) and "result" in output:
+        if extracted is None and isinstance(output, dict) and "result" in output:
             result_val = output["result"]
             if isinstance(result_val, dict):
-                result_val["finding_index"] = index
-                return result_val
-            if isinstance(result_val, str) and result_val.strip():
-                parsed = json.loads(result_val)
-                parsed["finding_index"] = index
-                return parsed
+                extracted = result_val
+            elif isinstance(result_val, str) and result_val.strip():
+                try:
+                    extracted = json.loads(result_val)
+                except json.JSONDecodeError:
+                    pass
+
+        if extracted is not None:
+            extracted["finding_index"] = index
+            if _validate_verdict(extracted, index) is not None:
+                return extracted
+            logger.warning(
+                "Verdict from agent for finding #%d failed validation: %s",
+                index, {k: extracted.get(k) for k in _REQUIRED_VERDICT_KEYS},
+            )
+            inconclusive["evidence"] = "Agent returned malformed verdict"
+            return inconclusive
 
         logger.error("No structured output from verification agent for finding #%d", index)
         inconclusive["evidence"] = "No structured output in agent response"
@@ -413,17 +456,24 @@ async def verify_all_findings(
         for i in range(len(findings)):
             search_results_map[i] = []
 
-    # Create temp directory for verdict files
+    # Create temp directory for verdict files (clean up stale dirs first)
     base = os.environ.get("MPY_REVIEW_TMPDIR")
+    _cleanup_stale_tmpdirs(base)
     temp_dir = tempfile.mkdtemp(prefix="mpy-verify-", dir=base)
 
     system_prompt = build_verification_system_prompt()
 
-    # Spawn all verification agents in parallel
-    tasks = []
+    # Spawn verification agents with bounded parallelism
+    sem = asyncio.Semaphore(MAX_PARALLEL_VERIFIERS)
+
+    async def _guarded(coro):
+        async with sem:
+            return await coro
+
+    coros = []
     for i, finding in enumerate(findings):
-        tasks.append(
-            run_single_verification(
+        coros.append(
+            _guarded(run_single_verification(
                 finding=finding,
                 index=i,
                 diff_text=diff_text,
@@ -433,10 +483,10 @@ async def verify_all_findings(
                 repo=repo,
                 cwd=cwd,
                 env=env,
-            )
+            ))
         )
 
-    verdicts = await asyncio.gather(*tasks, return_exceptions=True)
+    verdicts = await asyncio.gather(*coros, return_exceptions=True)
 
     # Process results and write verdict files
     file_infos = []

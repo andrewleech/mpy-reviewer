@@ -522,7 +522,14 @@ async def verify_findings(
         len(findings), pr_number,
     )
 
-    from rag.verifier import REQUIRED_FINDING_FIELDS, verify_all_findings
+    from rag.verifier import REQUIRED_FINDING_FIELDS, MAX_FINDINGS, verify_all_findings
+
+    # Validate findings count
+    if len(findings) > MAX_FINDINGS:
+        return (
+            f"Error: too many findings ({len(findings)}). "
+            f"Maximum is {MAX_FINDINGS}. Prioritize the most important findings."
+        )
 
     # Validate finding fields
     for i, f in enumerate(findings):

@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import tempfile
+import time
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
@@ -15,8 +16,11 @@ from rag.verifier import (
     verify_all_findings,
     write_verdict_file,
     build_verification_orchestration_prompt,
+    _validate_verdict,
+    _cleanup_stale_tmpdirs,
     VERIFICATION_TIMEOUT,
     VERDICT_SCHEMA,
+    MAX_FINDINGS,
 )
 
 
@@ -303,3 +307,171 @@ def test_build_verification_orchestration_prompt_table():
 def test_build_verification_orchestration_prompt_empty():
     prompt = build_verification_orchestration_prompt([])
     assert "No findings were verified" in prompt
+
+
+# --- _validate_verdict ---
+
+def test_validate_verdict_valid():
+    v = _make_verdict(0)
+    assert _validate_verdict(v, 0) is v
+
+
+def test_validate_verdict_missing_keys():
+    assert _validate_verdict({"verdict": "confirmed"}, 0) is None
+
+
+def test_validate_verdict_invalid_verdict_value():
+    v = _make_verdict(0, verdict="INVALID")
+    assert _validate_verdict(v, 0) is None
+
+
+def test_validate_verdict_not_dict():
+    assert _validate_verdict("string", 0) is None
+
+
+# --- run_single_verification with result string fallback ---
+
+@pytest.mark.asyncio
+async def test_run_single_verification_result_string_fallback():
+    """Test the result-as-JSON-string fallback path."""
+    verdict = _make_verdict(0, verdict="false_positive")
+    output = json.dumps({
+        "type": "result",
+        "structured_output": None,
+        "result": json.dumps(verdict),
+    })
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    async def communicate(input=None):
+        return output.encode(), b""
+    mock_proc.communicate = communicate
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        result = await run_single_verification(
+            _make_finding(), 0, "diff", [],
+            build_verification_system_prompt(),
+        )
+
+    assert result["verdict"] == "false_positive"
+
+
+@pytest.mark.asyncio
+async def test_run_single_verification_malformed_verdict():
+    """Agent returns JSON that doesn't match verdict schema."""
+    bad_output = json.dumps({
+        "type": "result",
+        "structured_output": {"some_other_field": "value"},
+        "result": "",
+    })
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    async def communicate(input=None):
+        return bad_output.encode(), b""
+    mock_proc.communicate = communicate
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        result = await run_single_verification(
+            _make_finding(), 0, "diff", [],
+            build_verification_system_prompt(),
+        )
+
+    assert result["verdict"] == "inconclusive"
+    assert "malformed" in result["evidence"]
+
+
+# --- verify_all_findings with retriever ---
+
+@pytest.mark.asyncio
+async def test_verify_all_findings_with_retriever():
+    """Verify pre-fetch path exercises the retriever."""
+    findings = [_make_finding()]
+
+    verdict = _make_verdict(0)
+    stdout = _make_claude_output(verdict).encode()
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    async def communicate(input=None):
+        return stdout, b""
+    mock_proc.communicate = communicate
+
+    mock_retriever = MagicMock()
+    mock_retriever.search_with_filters.return_value = [
+        {"body": "precedent", "severity": "blocking", "domain": "correctness"},
+    ]
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            prompt, file_infos = await verify_all_findings(
+                findings, "diff text", retriever=mock_retriever,
+            )
+
+    assert len(file_infos) == 1
+    mock_retriever.search_with_filters.assert_called_once()
+    # Clean up
+    for info in file_infos:
+        os.unlink(info["path"])
+    os.rmdir(os.path.dirname(file_infos[0]["path"]))
+
+
+# --- verify_all_findings with gather exception ---
+
+@pytest.mark.asyncio
+async def test_verify_all_findings_gather_exception():
+    """When a verification coroutine raises, it becomes inconclusive."""
+    findings = [_make_finding()]
+
+    async def raise_error(*args, **kwargs):
+        raise RuntimeError("subprocess failed")
+
+    with patch("rag.verifier.run_single_verification", side_effect=raise_error):
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            prompt, file_infos = await verify_all_findings(
+                findings, "diff text",
+            )
+
+    assert len(file_infos) == 1
+    assert file_infos[0]["verdict"] == "inconclusive"
+    assert "error" in file_infos[0]["path"].lower() or "inconclusive" in file_infos[0]["path"]
+    # Clean up
+    for info in file_infos:
+        os.unlink(info["path"])
+    os.rmdir(os.path.dirname(file_infos[0]["path"]))
+
+
+# --- write_verdict_file with path-traversal verdict type ---
+
+def test_write_verdict_file_sanitizes_verdict_type():
+    """Verdict types with special characters are sanitized in filename."""
+    with tempfile.TemporaryDirectory(prefix="mpy-verify-test-") as tmp:
+        finding = _make_finding()
+        verdict = _make_verdict(0, verdict="../../etc/passwd")
+
+        info = write_verdict_file(tmp, finding, verdict)
+
+        # Filename should have special chars stripped
+        filename = os.path.basename(info["path"])
+        assert "/" not in filename
+        assert ".." not in filename
+
+
+# --- _cleanup_stale_tmpdirs ---
+
+def test_cleanup_stale_tmpdirs():
+    """Old mpy-verify-* dirs are removed."""
+    with tempfile.TemporaryDirectory() as base:
+        stale = os.path.join(base, "mpy-verify-old")
+        os.makedirs(stale)
+        # Backdate mtime
+        old_time = time.time() - 7200  # 2 hours ago
+        os.utime(stale, (old_time, old_time))
+
+        fresh = os.path.join(base, "mpy-verify-new")
+        os.makedirs(fresh)
+
+        _cleanup_stale_tmpdirs(base)
+
+        assert not os.path.exists(stale)
+        assert os.path.exists(fresh)
