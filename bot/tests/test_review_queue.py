@@ -126,30 +126,8 @@ async def test_success_callback():
 
 
 @pytest.mark.asyncio
-async def test_failure_callback_on_false():
-    failures = []
-
-    async def handler(req):
-        return False
-
-    async def on_failure(req, err):
-        failures.append((req.pr_number, err))
-
-    q = ReviewQueue(handler=handler, on_failure=on_failure)
-    task = asyncio.create_task(q.start_worker())
-    await q.enqueue(make_review_request(pr_number=1))
-    await asyncio.sleep(0.1)
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-    assert len(failures) == 1
-    assert failures[0] == (1, None)
-
-
-@pytest.mark.asyncio
 async def test_failure_callback_on_exception():
+    """Handler exception routes to on_failure with the exception instance."""
     failures = []
 
     async def handler(req):

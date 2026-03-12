@@ -9,6 +9,7 @@ import fcntl
 import json
 import logging
 import os
+import re
 import tempfile
 import urllib.error
 
@@ -29,8 +30,57 @@ def _get_mpy_checkout() -> str:
     return os.environ.get("MPY_CHECKOUT", "/workspace/micropython")
 
 
-class DiffTooLargeError(Exception):
+class ReviewError(Exception):
+    """Base class for review failures with user-facing messages."""
+
+    user_message: str = "Review failed due to an unexpected error. Retry with `/review`."
+
+    def __init__(self, message: str | None = None, user_message: str | None = None):
+        super().__init__(message or self.user_message)
+        if user_message is not None:
+            self.user_message = user_message
+
+
+class DiffTooLargeError(ReviewError):
     """Raised when PR diff exceeds MAX_DIFF_CHARS."""
+
+    user_message = "Diff is too large for automated review. Please split into smaller PRs."
+
+
+class PromptTooLongError(ReviewError):
+    """Raised when the prompt exceeds the model's context limit."""
+
+    user_message = "PR content exceeds the model's context limit. Please split into smaller PRs."
+
+
+class RateLimitedError(ReviewError):
+    """Raised when the API returns a rate limit error."""
+
+    user_message = "Review is temporarily rate-limited. Retry with `/review` in a few minutes."
+
+
+class ReviewTimeoutError(ReviewError):
+    """Raised when the review subprocess times out."""
+
+    user_message = "Review timed out. The PR may be too complex for a single pass. Retry with `/review`."
+
+
+class MetadataFetchError(ReviewError):
+    """Raised when PR metadata cannot be fetched."""
+
+    user_message = "Could not fetch PR metadata from GitHub. Retry with `/review`."
+
+
+class EmptyDiffError(ReviewError):
+    """Raised when the PR diff is empty."""
+
+    user_message = "PR has an empty diff — nothing to review."
+
+
+class DiffFetchError(ReviewError):
+    """Raised when the PR diff cannot be fetched from GitHub."""
+
+    user_message = "Could not fetch PR diff from GitHub. Retry with `/review`."
 
 
 async def run_review(
@@ -49,7 +99,10 @@ async def run_review(
         auth: GitHub App authentication (optional).
 
     Returns:
-        True on success, False on failure.
+        True on success.
+
+    Raises:
+        ReviewError: On any expected failure (subclass indicates cause).
     """
     token = auth.get_token(request.installation_id) if auth else None
 
@@ -63,7 +116,9 @@ async def run_review(
         )
     except Exception as e:
         logger.error("Failed to fetch PR #%d metadata: %s", request.pr_number, e)
-        return False
+        raise MetadataFetchError(
+            f"Failed to fetch PR #{request.pr_number} metadata: {e}"
+        ) from e
 
     pr_title = pr_data.get("title", "")
     pr_body = pr_data.get("body", "") or ""
@@ -71,14 +126,19 @@ async def run_review(
 
     if not head_sha:
         logger.error("No head SHA available for PR #%d", request.pr_number)
-        return False
-    # Fetch the diff
+        raise MetadataFetchError(
+            f"No head SHA available for PR #{request.pr_number}"
+        )
+    # Fetch the diff — returns None on fetch failure, "" on genuinely empty diff.
     diff_text = await _fetch_pr_diff(
         request.repo_owner, request.repo_name, request.pr_number, token
     )
+    if diff_text is None:
+        logger.error("Failed to fetch diff for PR #%d", request.pr_number)
+        raise DiffFetchError(f"Failed to fetch diff for PR #{request.pr_number}")
     if not diff_text:
         logger.error("Empty diff for PR #%d", request.pr_number)
-        return False
+        raise EmptyDiffError(f"Empty diff for PR #{request.pr_number}")
 
     if len(diff_text) > MAX_DIFF_CHARS:
         raise DiffTooLargeError(
@@ -170,12 +230,19 @@ async def run_review(
         )
 
         stderr_text = stderr.decode(errors="replace")
+        stdout_text = stdout.decode(errors="replace")
         if proc.returncode != 0:
             logger.error(
-                "claude -p failed for PR #%d (rc=%d): %s",
+                "claude -p failed for PR #%d (rc=%d) stderr: %s",
                 request.pr_number, proc.returncode, stderr_text[:2000],
             )
-            return False
+            if stdout_text.strip():
+                logger.error(
+                    "claude -p stdout for PR #%d: %s",
+                    request.pr_number, stdout_text[:2000],
+                )
+            combined = (stderr_text + stdout_text).lower()
+            raise _classify_claude_failure(combined, proc.returncode)
 
         logger.info(
             "claude -p completed for PR #%d (rc=%d, stdout=%d bytes, stderr=%d bytes)",
@@ -186,7 +253,7 @@ async def run_review(
                         request.pr_number, stderr_text[:3000])
         return True
 
-    except asyncio.TimeoutError:
+    except asyncio.TimeoutError as exc:
         logger.error(
             "claude -p timed out for PR #%d after %ds",
             request.pr_number, config.review.timeout_seconds,
@@ -200,7 +267,10 @@ async def run_review(
                 await proc.wait()
         except Exception as e:
             logger.debug("Subprocess cleanup after timeout: %s", e)
-        return False
+        raise ReviewTimeoutError(
+            f"claude -p timed out for PR #{request.pr_number} "
+            f"after {config.review.timeout_seconds}s"
+        ) from exc
     finally:
         # Clean up temp file
         try:
@@ -209,11 +279,27 @@ async def run_review(
             pass
 
 
+_RATE_LIMIT_RE = re.compile(r"rate.?limit|status[:\s]+429|\b429\b.*too many", re.IGNORECASE)
+
+
+def _classify_claude_failure(combined_output: str, returncode: int) -> ReviewError:
+    """Map claude -p failure output to a typed ReviewError."""
+    if "prompt is too long" in combined_output:
+        return PromptTooLongError(f"claude -p failed: prompt is too long (rc={returncode})")
+    if _RATE_LIMIT_RE.search(combined_output):
+        return RateLimitedError(f"claude -p failed: rate limited (rc={returncode})")
+    return ReviewError(f"claude -p failed (rc={returncode})")
+
+
 async def _fetch_pr_diff(
     owner: str, repo: str, pr_number: int, token: str | None
-) -> str:
-    """Fetch the PR diff via GitHub API."""
-    def _do_fetch() -> str:
+) -> str | None:
+    """Fetch the PR diff via GitHub API.
+
+    Returns the diff text, empty string if the PR has no changes, or None on
+    fetch failure (HTTP error, network error).
+    """
+    def _do_fetch() -> str | None:
         try:
             return github_request(
                 "GET",
@@ -229,10 +315,10 @@ async def _fetch_pr_diff(
                 logger.error("PR #%d not found", pr_number)
             else:
                 logger.error("Failed to fetch diff for PR #%d: HTTP %d", pr_number, e.code)
-            return ""
+            return None
         except urllib.error.URLError as e:
             logger.error("Network error fetching diff for PR #%d: %s", pr_number, e)
-            return ""
+            return None
     return await asyncio.to_thread(_do_fetch)
 
 

@@ -12,7 +12,9 @@ import pytest
 
 from bot.orchestrator import (
     run_review, _fetch_pr_diff, _update_checkout, _build_mcp_config,
-    _write_temp_json, MAX_DIFF_CHARS, DiffTooLargeError,
+    _write_temp_json, _classify_claude_failure, MAX_DIFF_CHARS,
+    ReviewError, DiffTooLargeError, DiffFetchError, PromptTooLongError,
+    RateLimitedError, ReviewTimeoutError, MetadataFetchError, EmptyDiffError,
 )
 from bot.tests.conftest import make_review_request
 
@@ -79,8 +81,22 @@ async def test_run_review_empty_diff():
 
     with patch("bot.orchestrator.github_request", return_value={"title": "t", "body": "b", "head": {"sha": "abc"}}):
         with patch("bot.orchestrator._fetch_pr_diff", new_callable=AsyncMock, return_value=""):
-            result = await run_review(req, config, auth=auth)
-    assert result is False
+            with pytest.raises(EmptyDiffError):
+                await run_review(req, config, auth=auth)
+
+
+@pytest.mark.asyncio
+async def test_run_review_diff_fetch_failure():
+    """Raises DiffFetchError when diff fetch returns None (HTTP/network error)."""
+    req = make_review_request()
+    config = _make_config()
+    auth = MagicMock()
+    auth.get_token.return_value = "tok"
+
+    with patch("bot.orchestrator.github_request", return_value={"title": "t", "body": "b", "head": {"sha": "abc"}}):
+        with patch("bot.orchestrator._fetch_pr_diff", new_callable=AsyncMock, return_value=None):
+            with pytest.raises(DiffFetchError):
+                await run_review(req, config, auth=auth)
 
 
 @pytest.mark.asyncio
@@ -181,28 +197,31 @@ async def test_run_review_timeout():
                 with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
                     with patch("bot.orchestrator._write_temp_json", return_value="/tmp/f.json"):
                         with patch("os.unlink"):
-                            assert await run_review(make_review_request(), config, auth=auth) is False
+                            with pytest.raises(ReviewTimeoutError):
+                                await run_review(make_review_request(), config, auth=auth)
     mock_proc.terminate.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_run_review_pr_fetch_failure():
-    """Returns False when PR metadata fetch fails."""
+    """Raises MetadataFetchError when PR metadata fetch fails."""
     auth = MagicMock()
     auth.get_token.return_value = "tok"
 
     with patch("bot.orchestrator.github_request", side_effect=RuntimeError("API down")):
-        assert await run_review(make_review_request(), _make_config(), auth=auth) is False
+        with pytest.raises(MetadataFetchError):
+            await run_review(make_review_request(), _make_config(), auth=auth)
 
 
 @pytest.mark.asyncio
 async def test_run_review_no_head_sha():
-    """Returns False when no head SHA is available."""
+    """Raises MetadataFetchError when no head SHA is available."""
     auth = MagicMock()
     auth.get_token.return_value = "tok"
 
     with patch("bot.orchestrator.github_request", return_value={"title": "t", "body": "b", "head": {"sha": ""}}):
-        assert await run_review(make_review_request(head_sha=""), _make_config(), auth=auth) is False
+        with pytest.raises(MetadataFetchError):
+            await run_review(make_review_request(head_sha=""), _make_config(), auth=auth)
 
 
 def test_build_mcp_config():
@@ -234,29 +253,29 @@ async def test_run_review_auth_none():
 async def test_fetch_pr_diff_403():
     err = urllib.error.HTTPError("", 403, "Forbidden", None, BytesIO(b""))
     with patch("bot.orchestrator.github_request", side_effect=err):
-        assert await _fetch_pr_diff("o", "r", 1, "tok") == ""
+        assert await _fetch_pr_diff("o", "r", 1, "tok") is None
 
 
 @pytest.mark.asyncio
 async def test_fetch_pr_diff_404():
     err = urllib.error.HTTPError("", 404, "Not Found", None, BytesIO(b""))
     with patch("bot.orchestrator.github_request", side_effect=err):
-        assert await _fetch_pr_diff("o", "r", 1, "tok") == ""
+        assert await _fetch_pr_diff("o", "r", 1, "tok") is None
 
 
 @pytest.mark.asyncio
 async def test_fetch_pr_diff_500():
     err = urllib.error.HTTPError("", 500, "Server Error", None, BytesIO(b""))
     with patch("bot.orchestrator.github_request", side_effect=err):
-        assert await _fetch_pr_diff("o", "r", 1, "tok") == ""
+        assert await _fetch_pr_diff("o", "r", 1, "tok") is None
 
 
 @pytest.mark.asyncio
 async def test_fetch_pr_diff_url_error():
-    """Returns empty string on network error."""
+    """Returns None on network error."""
     err = urllib.error.URLError("Connection refused")
     with patch("bot.orchestrator.github_request", side_effect=err):
-        assert await _fetch_pr_diff("o", "r", 1, "tok") == ""
+        assert await _fetch_pr_diff("o", "r", 1, "tok") is None
 
 
 @pytest.mark.asyncio
@@ -268,12 +287,35 @@ async def test_update_checkout_no_git_dir():
 
 @pytest.mark.asyncio
 async def test_run_review_subprocess_failure():
-    """Returns False when claude -p exits non-zero."""
+    """Raises ReviewError when claude -p exits non-zero."""
     auth = MagicMock()
     auth.get_token.return_value = "tok"
 
     with _mock_run_review_env(proc_returncode=1, proc_stdout=b"", proc_stderr=b"error output"):
-        assert await run_review(make_review_request(), _make_config(), auth=auth) is False
+        with pytest.raises(ReviewError):
+            await run_review(make_review_request(), _make_config(), auth=auth)
+
+
+@pytest.mark.asyncio
+async def test_run_review_subprocess_prompt_too_long():
+    """Raises PromptTooLongError when claude -p reports prompt is too long."""
+    auth = MagicMock()
+    auth.get_token.return_value = "tok"
+
+    with _mock_run_review_env(proc_returncode=1, proc_stdout=b"", proc_stderr=b"prompt is too long"):
+        with pytest.raises(PromptTooLongError):
+            await run_review(make_review_request(), _make_config(), auth=auth)
+
+
+@pytest.mark.asyncio
+async def test_run_review_subprocess_rate_limited():
+    """Raises RateLimitedError when claude -p reports rate limit."""
+    auth = MagicMock()
+    auth.get_token.return_value = "tok"
+
+    with _mock_run_review_env(proc_returncode=1, proc_stdout=b"", proc_stderr=b"rate limit exceeded"):
+        with pytest.raises(RateLimitedError):
+            await run_review(make_review_request(), _make_config(), auth=auth)
 
 
 @pytest.mark.asyncio
@@ -340,3 +382,73 @@ async def test_run_review_allowed_tools_include_verify():
     idx = cmd_list.index("--allowedTools")
     tools_str = cmd_list[idx + 1]
     assert "mcp__mpy-reviewer__verify_findings" in tools_str
+
+
+# --- _classify_claude_failure tests ---
+
+
+def test_classify_prompt_too_long():
+    err = _classify_claude_failure("error: prompt is too long for model", 1)
+    assert isinstance(err, PromptTooLongError)
+    assert "context limit" in err.user_message
+
+
+def test_classify_rate_limit():
+    err = _classify_claude_failure("rate limit exceeded, please retry", 1)
+    assert isinstance(err, RateLimitedError)
+    assert "rate-limited" in err.user_message
+
+
+def test_classify_429():
+    err = _classify_claude_failure("http error 429 too many requests", 1)
+    assert isinstance(err, RateLimitedError)
+
+
+def test_classify_status_429():
+    err = _classify_claude_failure("http error status: 429", 1)
+    assert isinstance(err, RateLimitedError)
+
+
+def test_classify_429_too_many():
+    err = _classify_claude_failure("error 429 too many requests", 1)
+    assert isinstance(err, RateLimitedError)
+
+
+def test_classify_429_substring_no_false_positive():
+    """Bare '429' inside a larger number should not trigger RateLimitedError."""
+    err = _classify_claude_failure("processed 4290 tokens in batch", 1)
+    assert type(err) is ReviewError
+
+
+def test_classify_combined_stderr_stdout():
+    """Trigger phrase in stdout with unrelated stderr still matches."""
+    err = _classify_claude_failure("some warnings here\nprompt is too long for model", 1)
+    assert isinstance(err, PromptTooLongError)
+
+
+def test_classify_generic_failure():
+    err = _classify_claude_failure("some unknown error", 1)
+    assert type(err) is ReviewError
+    assert "rc=1" in str(err)
+
+
+# --- ReviewError hierarchy tests ---
+
+
+def test_review_error_is_exception():
+    assert issubclass(ReviewError, Exception)
+
+
+def test_all_subclasses_have_user_message():
+    for cls in [DiffTooLargeError, DiffFetchError, PromptTooLongError,
+                RateLimitedError, ReviewTimeoutError, MetadataFetchError,
+                EmptyDiffError]:
+        assert issubclass(cls, ReviewError)
+        err = cls("internal detail")
+        assert err.user_message  # non-empty
+        assert "internal detail" not in err.user_message
+
+
+def test_review_error_custom_user_message():
+    err = ReviewError("internal", user_message="custom message")
+    assert err.user_message == "custom message"

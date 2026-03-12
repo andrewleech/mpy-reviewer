@@ -258,6 +258,7 @@ async def test_on_failure_does_not_leak_error_details(callback_app):
 
     assert len(posted_comments) == 1
     assert "secret internal traceback" not in posted_comments[0]
+    assert "unexpected error" in posted_comments[0].lower()
     assert "Retry with `/review`" in posted_comments[0]
 
 
@@ -322,9 +323,19 @@ def test_payload_too_large_no_content_length(app):
 
 
 @pytest.mark.asyncio
-async def test_on_failure_diff_too_large_uses_fixed_message(callback_app):
-    """DiffTooLargeError posts a generic message, not the raw exception."""
-    from bot.orchestrator import DiffTooLargeError
+@pytest.mark.parametrize("error_cls,expected_fragment", [
+    ("DiffTooLargeError", "too large"),
+    ("DiffFetchError", "could not fetch"),
+    ("PromptTooLongError", "context limit"),
+    ("RateLimitedError", "rate-limited"),
+    ("ReviewTimeoutError", "timed out"),
+    ("MetadataFetchError", "metadata"),
+    ("EmptyDiffError", "empty diff"),
+])
+async def test_on_failure_review_error_uses_user_message(callback_app, error_cls, expected_fragment):
+    """Each ReviewError subclass posts its user_message to GitHub."""
+    import bot.orchestrator as orch
+    cls = getattr(orch, error_cls)
 
     app_inst, _ = callback_app
     posted = []
@@ -335,17 +346,39 @@ async def test_on_failure_diff_too_large_uses_fixed_message(callback_app):
         return None
 
     req = ReviewRequest(
-        pr_number=96, comment_id=100,
+        pr_number=80, comment_id=100,
         repo_owner="o", repo_name="r",
         requester="u", head_sha="abc",
     )
     with patch("bot.webhook_service.github_request", side_effect=mock_gr):
-        await app_inst.state.queue.on_failure(
-            req, DiffTooLargeError("Diff exceeds 1,000,000 chars (2,000,000)")
-        )
+        await app_inst.state.queue.on_failure(req, cls("internal detail"))
     assert len(posted) == 1
-    assert "1,000,000" not in posted[0]
-    assert "too large" in posted[0].lower()
+    assert expected_fragment in posted[0].lower()
+    assert "internal detail" not in posted[0]
+
+
+@pytest.mark.asyncio
+async def test_on_failure_review_error_suppressed_after_max_retries(callback_app):
+    """ReviewError is still suppressed after MAX_FAILURE_RETRIES."""
+    from bot.orchestrator import ReviewTimeoutError
+
+    app_inst, _ = callback_app
+    posted = []
+
+    def mock_gr(method, endpoint, body=None, token=None, **kw):
+        if method == "POST" and "/comments" in endpoint and body and "body" in body:
+            posted.append(body["body"])
+        return None
+
+    req = ReviewRequest(
+        pr_number=79, comment_id=100,
+        repo_owner="o", repo_name="r",
+        requester="u", head_sha="abc",
+    )
+    app_inst.state.failure_counts["pr-79"] = MAX_FAILURE_RETRIES + 1
+    with patch("bot.webhook_service.github_request", side_effect=mock_gr):
+        await app_inst.state.queue.on_failure(req, ReviewTimeoutError("timed out"))
+    assert len(posted) == 0
 
 
 def test_wrong_repo_rejected(app):

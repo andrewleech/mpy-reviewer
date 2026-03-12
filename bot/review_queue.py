@@ -41,10 +41,10 @@ class TriageRequest:
 class ReviewQueue:
     """Processes review requests serially with cancel-restart for same-PR duplicates.
 
-    The handler callable returns True on success, False on non-exceptional failure.
-    It may also raise exceptions — these are caught by the worker and routed to
-    on_failure with the exception instance. DiffTooLargeError is the primary
-    typed exception used for user-facing error messages.
+    The handler returns on success or raises an exception on failure. Exceptions
+    are caught by the worker and routed to on_failure with the exception instance.
+    ReviewError subclasses carry a user_message attribute for user-facing error
+    reporting.
 
     Usage:
         queue = ReviewQueue(handler=run_review_func)
@@ -54,7 +54,7 @@ class ReviewQueue:
 
     def __init__(
         self,
-        handler: Callable[[ReviewRequest], Awaitable[bool]],
+        handler: Callable[[ReviewRequest], Awaitable[None]],
         on_success: Callable[[ReviewRequest], Awaitable[None]] | None = None,
         on_failure: Callable[[ReviewRequest, Exception | None], Awaitable[None]] | None = None,
     ):
@@ -132,11 +132,9 @@ class ReviewQueue:
                 # Wrap handler in a task so we can cancel it
                 task = asyncio.create_task(self.handler(request))
                 self._current_task = task
-                success = await task
-                if success and self.on_success:
+                await task
+                if self.on_success:
                     await self.on_success(request)
-                elif not success and self.on_failure:
-                    await self.on_failure(request, None)
             except asyncio.CancelledError:
                 logger.info(
                     "Review for PR #%d was cancelled", request.pr_number

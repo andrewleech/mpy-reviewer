@@ -370,8 +370,8 @@ def create_app(config: BotConfig | None = None) -> Starlette:
         # Per-app failure counter — no cross-app leakage, no test isolation fixture needed.
         failure_counts: OrderedDict[str, int] = OrderedDict()
 
-        async def _handler(req: ReviewRequest) -> bool:
-            return await run_review(req, config, auth=auth)
+        async def _handler(req: ReviewRequest) -> None:
+            await run_review(req, config, auth=auth)
 
         async def _on_success(req: ReviewRequest) -> None:
             failure_counts.pop(f"pr-{req.pr_number}", None)
@@ -389,7 +389,7 @@ def create_app(config: BotConfig | None = None) -> Starlette:
                 logger.warning("Failed to add success reaction: %s", e)
 
         async def _on_failure(req: ReviewRequest, err: Exception | None) -> None:
-            from bot.orchestrator import DiffTooLargeError
+            from bot.orchestrator import ReviewError
 
             try:
                 token = auth.get_token(req.installation_id)
@@ -417,19 +417,19 @@ def create_app(config: BotConfig | None = None) -> Starlette:
             if len(failure_counts) > _MAX_TRACKED_FAILURES:
                 failure_counts.popitem(last=False)
 
-            if isinstance(err, DiffTooLargeError):
-                body = "Diff is too large for automated review. Please split into smaller PRs."
-            elif failure_counts[retry_key] <= MAX_FAILURE_RETRIES:
-                if err:
-                    # Log internal details (not posted to GitHub)
-                    logger.error("Review failed for PR #%d: %s", req.pr_number, err)
-                body = "Review failed. Retry with `/review`."
-            else:
+            if failure_counts[retry_key] > MAX_FAILURE_RETRIES:
                 logger.warning(
                     "Suppressing failure comment for PR #%d (retry count %d)",
                     req.pr_number, failure_counts[retry_key],
                 )
                 return  # suppressed
+
+            if isinstance(err, ReviewError):
+                body = err.user_message
+            else:
+                if err:
+                    logger.error("Review failed for PR #%d: %s", req.pr_number, err)
+                body = "Review failed due to an unexpected error. Retry with `/review`."
 
             try:
                 await asyncio.to_thread(
