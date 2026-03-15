@@ -147,7 +147,9 @@ async def run_review(
         )
 
     # Update checkout
-    checkout_ok = await _update_checkout(request.pr_number, head_sha)
+    checkout_ok = await _update_checkout(
+        request.pr_number, head_sha, request.repo_owner, request.repo_name,
+    )
     if not checkout_ok:
         logger.error("Checkout failed for PR #%d, proceeding with current HEAD", request.pr_number)
 
@@ -322,8 +324,13 @@ async def _fetch_pr_diff(
     return await asyncio.to_thread(_do_fetch)
 
 
-async def _update_checkout(pr_number: int, head_sha: str) -> bool:
+async def _update_checkout(
+    pr_number: int, head_sha: str, repo_owner: str, repo_name: str,
+) -> bool:
     """Update the shared MicroPython checkout to the PR's head commit.
+
+    For fork repos (where repo_owner/repo_name differs from origin), a
+    temporary remote is added to fetch the PR ref, then removed after checkout.
 
     Returns True on success, False on failure.
     The ReviewQueue serializes reviews, so concurrent checkouts are not expected.
@@ -367,13 +374,46 @@ async def _update_checkout(pr_number: int, head_sha: str) -> bool:
                 return False
             return True
 
+        # Determine whether this PR lives on origin or a fork.
+        # Read origin URL to compare against the request's repo.
+        is_fork = False
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "remote", "get-url", "origin", cwd=mpy_checkout,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+            origin_url = stdout_bytes.decode().strip().lower()
+            repo_slug = f"{repo_owner}/{repo_name}".lower()
+            if repo_slug not in origin_url:
+                is_fork = True
+        except Exception:
+            pass  # Assume not a fork if we can't determine
+
+        fork_remote = f"_fork_{repo_owner}" if is_fork else None
+
         try:
             if not await _run_git("checkout", "--", "."):
                 return False
             if not await _run_git("clean", "-fd", "-e", ".codanna/"):
                 return False
-            if not await _run_git("fetch", "origin", f"refs/pull/{pr_number}/head"):
-                return False
+
+            if is_fork:
+                fork_url = f"https://github.com/{repo_owner}/{repo_name}.git"
+                # Add temporary remote for the fork
+                await _run_git("remote", "remove", fork_remote)  # ignore failure
+                if not await _run_git("remote", "add", fork_remote, fork_url):
+                    return False
+                if not await _run_git(
+                    "fetch", fork_remote, f"refs/pull/{pr_number}/head",
+                ):
+                    return False
+            else:
+                if not await _run_git(
+                    "fetch", "origin", f"refs/pull/{pr_number}/head",
+                ):
+                    return False
+
             if not await _run_git("checkout", "--detach", "FETCH_HEAD"):
                 return False
 
@@ -398,6 +438,10 @@ async def _update_checkout(pr_number: int, head_sha: str) -> bool:
         except Exception as e:
             logger.warning("Failed to update checkout for PR #%d: %s", pr_number, e)
             return False
+        finally:
+            # Clean up temporary fork remote
+            if fork_remote:
+                await _run_git("remote", "remove", fork_remote)
     finally:
         # Synchronous unlock + close — fast syscalls, no event loop concern.
         fcntl.flock(lock_fd, fcntl.LOCK_UN)

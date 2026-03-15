@@ -130,7 +130,7 @@ async def test_update_checkout_checks_return_codes():
             return proc
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
-            result = await _update_checkout(1, "abc123")
+            result = await _update_checkout(1, "abc123", "micropython", "micropython")
     assert result is False
 
 
@@ -148,12 +148,15 @@ async def test_update_checkout_detached_head():
                 # rev-parse HEAD returns the expected SHA
                 if "rev-parse" in args:
                     return b"abc12345\n", b""
+                # remote get-url returns origin URL
+                if "get-url" in args:
+                    return b"https://github.com/micropython/micropython.git\n", b""
                 return b"", b""
             proc.communicate = communicate
             return proc
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
-            result = await _update_checkout(1, "abc12345")
+            result = await _update_checkout(1, "abc12345", "micropython", "micropython")
 
     assert result is True
     # Second-to-last git call should be checkout --detach FETCH_HEAD
@@ -282,7 +285,7 @@ async def test_fetch_pr_diff_url_error():
 async def test_update_checkout_no_git_dir():
     """Returns False when .git directory doesn't exist."""
     with patch("os.path.isdir", return_value=False):
-        assert await _update_checkout(1, "abc") is False
+        assert await _update_checkout(1, "abc", "micropython", "micropython") is False
 
 
 @pytest.mark.asyncio
@@ -333,8 +336,44 @@ async def test_update_checkout_sha_mismatch():
             return proc
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
-            result = await _update_checkout(1, "expected_sha")
+            result = await _update_checkout(1, "expected_sha", "micropython", "micropython")
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_update_checkout_fork_adds_remote():
+    """For fork repos, adds a temporary remote, fetches, then removes it."""
+    git_calls = []
+
+    with patch("os.path.isdir", return_value=True):
+        async def mock_exec(*args, **kwargs):
+            git_calls.append(args)
+            proc = MagicMock()
+            proc.returncode = 0
+            async def communicate():
+                if "rev-parse" in args:
+                    return b"abc12345\n", b""
+                if "get-url" in args:
+                    return b"https://github.com/micropython/micropython.git\n", b""
+                return b"", b""
+            proc.communicate = communicate
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+            result = await _update_checkout(1, "abc12345", "andrewleech", "micropython")
+
+    assert result is True
+    # Should have added a fork remote
+    add_calls = [c for c in git_calls if "remote" in c and "add" in c]
+    assert len(add_calls) == 1
+    assert "_fork_andrewleech" in add_calls[0]
+    assert "https://github.com/andrewleech/micropython.git" in add_calls[0]
+    # Should have fetched from the fork remote
+    fetch_calls = [c for c in git_calls if "fetch" in c and "_fork_andrewleech" in c]
+    assert len(fetch_calls) == 1
+    # Should have cleaned up the fork remote (in finally block)
+    remove_calls = [c for c in git_calls if "remote" in c and "remove" in c and "_fork_andrewleech" in c]
+    assert len(remove_calls) >= 1
 
 
 @pytest.mark.asyncio
