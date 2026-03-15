@@ -1,4 +1,5 @@
 ---
+name: mpy-review
 description: Use this skill when the user wants to review MicroPython code changes using historical review patterns. Invoke when user mentions reviewing code, finding review examples, or wants feedback on MicroPython PRs/commits/diffs. Provides semantic search across ~19.5K categorized review comments.
 ---
 
