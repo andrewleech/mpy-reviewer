@@ -15,17 +15,27 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
+LOCK_DIR = Path.home() / ".cache" / "mpy-reviewer"
+
+# Log to both stderr (for Claude Code's transport) and a persistent file.
+# PID in the format string distinguishes concurrent proxy processes.
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - mcp-proxy - %(levelname)s - %(message)s",
+    format=f"%(asctime)s - mcp-proxy[{os.getpid()}] - %(levelname)s - %(message)s",
     stream=sys.stderr,
 )
 logger = logging.getLogger(__name__)
 
-LOCK_DIR = Path.home() / ".cache" / "mpy-reviewer"
+LOCK_DIR.mkdir(parents=True, exist_ok=True)
+_file_handler = logging.FileHandler(LOCK_DIR / "proxy.log")
+_file_handler.setFormatter(logging.Formatter(
+    f"%(asctime)s - mcp-proxy[{os.getpid()}] - %(levelname)s - %(message)s"
+))
+logger.addHandler(_file_handler)
 LOCK_FILE = LOCK_DIR / "server.lock"
 HEALTH_TIMEOUT = 30  # seconds to wait for server to become healthy
 HEALTH_INTERVAL = 0.5  # seconds between health checks
@@ -116,6 +126,7 @@ def _spawn_server(port: int) -> int:
         start_new_session=True,
         env=env,
     )
+    log_file.close()  # Popen duplicates the fd
 
     logger.info("Server log: %s", log_path)
     return proc.pid
@@ -187,6 +198,35 @@ def _ensure_server() -> int:
         os.close(fd)
 
 
+def _watch_parent() -> None:
+    """Exit if parent process dies (reparented to init/systemd)."""
+    original_ppid = os.getppid()
+    while True:
+        time.sleep(10)
+        if os.getppid() != original_ppid:
+            logger.info("Parent process died (was %d), exiting", original_ppid)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
+
+
+def _heartbeat(port: int) -> None:
+    """Periodically check server health. Exit if server dies."""
+    # Wait before first check to let startup settle
+    time.sleep(30)
+    while True:
+        if not _port_connectable(port):
+            logger.error("Server on port %d unreachable, exiting", port)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
+        time.sleep(30)
+
+
+def _handle_sigterm(signum, frame):
+    """Clean exit on SIGTERM/SIGHUP."""
+    logger.info("Received signal %d, exiting", signum)
+    sys.exit(0)
+
+
 def _run_proxy(port: int) -> None:
     """Run the stdio-to-SSE proxy using FastMCP's proxy support."""
     from fastmcp import FastMCP
@@ -206,8 +246,19 @@ def _run_direct() -> None:
 
 
 def main():
+    # Clean exit on signals
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+    signal.signal(signal.SIGHUP, _handle_sigterm)
+
+    # Exit if parent process dies
+    threading.Thread(target=_watch_parent, daemon=True).start()
+
     try:
         port = _ensure_server()
+
+        # Exit if the shared server becomes unreachable
+        threading.Thread(target=_heartbeat, args=(port,), daemon=True).start()
+
         _run_proxy(port)
     except Exception as e:
         logger.error("Proxy setup failed: %s", e)

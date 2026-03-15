@@ -6,6 +6,7 @@ Queries require a task prefix; documents/code do not.
 
 from typing import List, Optional
 import logging
+import os
 
 import numpy as np
 from tqdm import tqdm
@@ -52,6 +53,10 @@ class CodeEmbedder:
             device=self.device,
         )
         self._model.max_seq_length = self.max_seq_length
+
+        if os.environ.get("MPY_REVIEWER_FP16", "").lower() in ("1", "true"):
+            self._model = self._model.half()
+            logger.info("Model converted to float16")
 
         logger.info("Model loaded successfully")
 
