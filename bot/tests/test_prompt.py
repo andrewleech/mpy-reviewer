@@ -5,7 +5,8 @@ from bot.prompt import annotate_diff, build_system_prompt, build_user_message
 
 def test_system_prompt_includes_style_guide():
     prompt = build_system_prompt()
-    assert "dpgeorge Review Style" in prompt
+    assert "MicroPython Review Style" in prompt
+    assert "dpgeorge" not in prompt
 
 
 def test_system_prompt_includes_review_guidance():

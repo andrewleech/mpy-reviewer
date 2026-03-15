@@ -1,4 +1,4 @@
-"""Prompt assembly for dpgeorge-style code review."""
+"""Prompt assembly for MicroPython code review."""
 
 from typing import List, Dict, Any, Optional
 import logging
@@ -29,11 +29,11 @@ class ReviewContext:
 # Body length medians: blocking=121 chars, suggestion=126 chars, nitpick=45 chars.
 # Top opening words: "I" (649), "This" (427), "Please" (157+105), "The" (118),
 # "Is" (100), "If" (72), "Can" (69), "Why" (69), "Maybe" (60).
-STYLE_GUIDE = """# dpgeorge Review Style (data-driven)
+STYLE_GUIDE = """# MicroPython Review Style (data-driven)
 
 ## Voice and Tone
 
-dpgeorge's reviews are terse, technical, and direct. No pleasantries, no hedging,
+Reviews are terse, technical, and direct. No pleasantries, no hedging,
 no compliments on unrelated work. Feedback goes straight to the issue.
 
 Common opening patterns (in order of frequency):
@@ -58,23 +58,25 @@ technical detail to explain why. They often include code corrections inline.
 
 ## What NOT to Do
 
-- Do NOT open with "Great work on..." or "Thanks for..." — dpgeorge never does this.
+- Do NOT open with "Great work on..." or "Thanks for..."
 - Do NOT use filler phrases like "I believe", "It seems like", "If I'm not mistaken".
 - Do NOT explain obvious things. Assume the reader is an experienced developer.
 - Do NOT wrap suggestions in excessive politeness. "Please use X" is sufficient.
 - Do NOT use bullet-point lists where a single sentence suffices.
+- Do NOT mention whose style you are emulating or refer to the review database.
+  Present feedback as your own analysis.
 
 Bad (over-verbose, hedging):
 > "I think it might be worth considering whether this could potentially be
 > simplified by perhaps using a different approach. What do you think?"
 
-Good (dpgeorge actual):
+Good:
 > "Why not `mp_obj_get_int(args[3])`? That will do error checking that it's an int."
 
 Bad (gratuitous praise):
 > "Nice work! This is looking really good. One small thing though..."
 
-Good (dpgeorge actual):
+Good:
 > "This changes the error message. It now relies on `mp_unary_op` to raise
 > the error which is more generic than the error from before."
 
@@ -147,7 +149,7 @@ prose instead.
 
 
 class PromptBuilder:
-    """Build prompts for dpgeorge-style code review."""
+    """Build prompts for MicroPython code review."""
 
     def __init__(self, max_context_tokens: int = 15000):
         self.max_context_tokens = max_context_tokens
@@ -199,7 +201,7 @@ class PromptBuilder:
         if not examples:
             return ""
 
-        lines = ["# Relevant Past Reviews by dpgeorge\n"]
+        lines = ["# Relevant Past Reviews\n"]
 
         for i, example in enumerate(examples, 1):
             lines.append(f"## Example {i}")
@@ -223,7 +225,7 @@ class PromptBuilder:
                 lines.append(diff)
                 lines.append("```")
 
-            lines.append("\ndpgeorge's feedback:")
+            lines.append("\nReviewer feedback:")
             lines.append(f"> {example['body']}")
 
             # Thread context if available (from graph expansion)
@@ -300,7 +302,7 @@ class PromptBuilder:
         return REVIEW_GUIDANCE + """
 # Your Task
 
-Review the code above in dpgeorge's style. Be direct, technical, and concise.
+Review the code above. Be direct, technical, and concise.
 
 Before analysing individual hunks:
 - Locate and read `CODECONVENTIONS.md` at the MicroPython repo root
@@ -546,7 +548,7 @@ past review examples with their original code context (diff hunks).
 
 ## Your Task
 
-Review the code diff in dpgeorge's style. Be direct, technical, and concise.
+Review the code diff. Be direct, technical, and concise.
 
 For each issue found, format as a structured finding:
 ```json

@@ -33,7 +33,7 @@ class TestTriagePromptBuilder:
             issue_state="open",
         )
         prompt = self.builder.build_triage_prompt(context)
-        assert "dpgeorge" in prompt
+        assert "dpgeorge" not in prompt
         assert "terse" in prompt.lower() or "direct" in prompt.lower()
 
     def test_build_triage_prompt_includes_similar_issues(self):

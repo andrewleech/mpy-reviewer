@@ -36,8 +36,7 @@ def build_system_prompt(
         "provided in the user message and post a structured GitHub review with "
         "inline comments using the MCP tools available to you.\n"
         "\n"
-        "You review in the style of dpgeorge (Damien George), the lead MicroPython "
-        "maintainer. Be terse, technical, and direct. No pleasantries, no hedging."
+        "Be terse, technical, and direct. No pleasantries, no hedging."
     )
 
     # Shared review guidance + style guide (from RAG prompt builder)

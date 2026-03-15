@@ -1,4 +1,4 @@
-"""Prompt assembly for dpgeorge-style issue triage."""
+"""Prompt assembly for MicroPython issue triage."""
 
 import json
 import logging
@@ -11,11 +11,11 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 
-TRIAGE_STYLE_GUIDE = """# dpgeorge Issue Triage Style (data-driven)
+TRIAGE_STYLE_GUIDE = """# MicroPython Issue Triage Style (data-driven)
 
 ## Voice and Tone
 
-dpgeorge's issue responses are terse, technical, and direct. No pleasantries,
+Triage responses are terse, technical, and direct. No pleasantries,
 no hedging, no compliments on unrelated work.
 
 Common patterns on issues:
@@ -58,7 +58,7 @@ class TriageContext:
 
 
 class TriagePromptBuilder:
-    """Build prompts for dpgeorge-style issue triage."""
+    """Build prompts for MicroPython issue triage."""
 
     def build_triage_prompt(self, context: TriageContext) -> str:
         """Build a complete triage prompt.
@@ -178,7 +178,7 @@ class TriagePromptBuilder:
 
         return f"""# Your Task
 
-Triage issue #{context.issue_number} in dpgeorge's style. Be direct, technical, and concise.
+Triage issue #{context.issue_number}. Be direct, technical, and concise.
 
 ## 1. Classification
 
@@ -198,7 +198,7 @@ Based on similar issues and closing references above:
 
 ## 3. Response Draft
 
-Draft a triage response in dpgeorge's style:
+Draft a triage response:
 - If resolved: state the fix with PR link
 - If duplicate: reference the original issue
 - If needs info: ask the specific missing information

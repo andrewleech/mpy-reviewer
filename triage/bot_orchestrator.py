@@ -163,8 +163,8 @@ def _build_triage_system_prompt(
 ) -> str:
     parts = [
         "You are an issue triage bot for the MicroPython project.",
-        "Your job is to classify issues, detect duplicates, and draft responses "
-        "in dpgeorge's terse, technical style.",
+        "Your job is to classify issues, detect duplicates, and draft responses. "
+        "Be terse, technical, and direct.",
         "",
         "## Workflow",
         f"1. Call triage_issue with the issue number (top_k={top_k}, "
