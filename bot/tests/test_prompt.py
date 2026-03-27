@@ -1,29 +1,6 @@
 """Tests for bot.prompt."""
 
-from bot.prompt import annotate_diff, build_system_prompt, build_user_message
-
-
-def test_system_prompt_includes_style_guide():
-    prompt = build_system_prompt()
-    assert "MicroPython Review Style" in prompt
-    assert "dpgeorge" not in prompt
-
-
-def test_system_prompt_includes_review_guidance():
-    prompt = build_system_prompt()
-    assert "small binary size" in prompt
-    assert "suggestion" in prompt
-
-
-def test_system_prompt_includes_security_section():
-    prompt = build_system_prompt()
-    assert "Security" in prompt
-    assert "untrusted-pr-content" in prompt
-
-
-def test_system_prompt_includes_additional_prompt():
-    prompt = build_system_prompt(additional_system_prompt="Extra instructions here")
-    assert "Extra instructions here" in prompt
+from bot.prompt import annotate_diff, build_user_message
 
 
 def test_user_message_wraps_in_untrusted_delimiters():
@@ -77,18 +54,6 @@ def test_sanitize_strips_injected_delimiters():
     )
     assert msg.count("<untrusted-pr-content>") == 1
     assert msg.count("</untrusted-pr-content>") == 1
-
-
-def test_system_prompt_includes_ci_section_by_default():
-    prompt = build_system_prompt()
-    assert "CI Inspection" in prompt
-    assert "get_check_runs" in prompt
-
-
-def test_system_prompt_excludes_ci_section_when_disabled():
-    prompt = build_system_prompt(check_ci=False)
-    assert "CI Inspection" not in prompt
-    assert "get_check_runs" not in prompt
 
 
 # --- annotate_diff tests ---
@@ -242,14 +207,6 @@ def test_annotate_diff_hunk_header_with_function_context():
     assert "R43  " in lines[5]
     assert "L43  " in lines[6]
     assert "R44  " in lines[6]
-
-
-def test_system_prompt_includes_verification_workflow():
-    prompt = build_system_prompt()
-    assert "verify_findings" in prompt
-    assert "structured findings" in prompt
-    assert "Building the findings array" in prompt
-    assert "Verification step" in prompt
 
 
 def test_build_user_message_contains_line_annotations():

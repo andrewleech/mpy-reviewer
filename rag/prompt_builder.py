@@ -1,4 +1,8 @@
-"""Prompt assembly for MicroPython code review."""
+"""Legacy prompt builder retained for CLI tool and Python API.
+
+STYLE_GUIDE and REVIEW_GUIDANCE have been extracted to
+mpy-rules/prompts/shared-context.md for the multi-agent review pipeline.
+"""
 
 from typing import List, Dict, Any, Optional
 import logging

@@ -1,19 +1,15 @@
-"""MCP server for MicroPython review RAG system.
+"""MCP server for MicroPython issue triage.
 
-Provides persistent access to the review database with warm model loading.
-Tools are designed for iterative use during a review session — call search_reviews
-multiple times with different queries, drill into PR history, etc.
+Provides persistent access to the issue triage database with warm model loading.
+Tools are designed for iterative use during a triage session -- call search_issues
+multiple times with different queries, drill into specific issues, etc.
 """
 
-import asyncio
-import glob as globmod
 import json
 import logging
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 
@@ -30,12 +26,9 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP(
     "mpy-reviewer",
     instructions=(
-        "MicroPython code review RAG system backed by 18,614 categorized review "
-        "comments. Use review_diff or review_pr as "
-        "the primary entry point for code review. Use search_reviews for targeted "
-        "follow-up queries during a review (e.g. searching for memory allocation "
-        "patterns, error handling examples). Use find_style_examples to calibrate "
-        "tone. Use get_pr_review_history to see full review threads for a PR."
+        "MicroPython issue triage system. Use triage_issue as the primary entry "
+        "point for triaging GitHub issues. Use search_issues for targeted queries "
+        "to find related issues by topic, component, or port."
     ),
 )
 
@@ -43,7 +36,7 @@ mcp = FastMCP(
 #
 # Activity-based timeout: the server shuts down when no tool calls have
 # occurred for _IDLE_TIMEOUT seconds, regardless of connected clients.
-# Proxy processes are stateless — if the server exits, new requests spawn
+# Proxy processes are stateless -- if the server exits, new requests spawn
 # a fresh one via _run_direct() fallback.
 
 _IDLE_TIMEOUT = int(os.environ.get("MPY_REVIEWER_IDLE_TIMEOUT", "1800"))  # 30 min default
@@ -84,31 +77,6 @@ def _start_idle_timer() -> None:
     _touch_activity()
 
 
-# Lazy-loaded singletons — survive across tool calls within a session
-_retriever = None
-_builder = None
-
-
-def _get_retriever():
-    global _retriever
-    if _retriever is None:
-        from rag.retriever import ReviewRetriever
-        _retriever = ReviewRetriever()
-        # Force eager load of embedder and connection so first query is warm
-        _ = _retriever.embedder
-        _ = _retriever.conn
-        logger.info("Retriever initialized (model warm)")
-    return _retriever
-
-
-def _get_builder():
-    global _builder
-    if _builder is None:
-        from rag.prompt_builder import PromptBuilder
-        _builder = PromptBuilder()
-    return _builder
-
-
 def _serialize_results(results: list, max_body: int = 2000) -> list:
     """Strip vector field and truncate large bodies for JSON transport."""
     clean = []
@@ -118,457 +86,6 @@ def _serialize_results(results: list, max_body: int = 2000) -> list:
             entry["body"] = entry["body"][:max_body] + "..."
         clean.append(entry)
     return clean
-
-
-def _extract_files_from_diff(diff_text: str) -> list:
-    """Extract file paths from unified diff text."""
-    from rag.codebase import extract_diff_file_paths
-    return extract_diff_file_paths(diff_text)
-
-
-_STALE_TMPDIR_AGE = 3600  # 1 hour
-
-
-def _cleanup_stale_review_tmpdirs() -> None:
-    """Remove mpy-review-* temp directories older than 1 hour."""
-    parent = os.environ.get("MPY_REVIEW_TMPDIR") or tempfile.gettempdir()
-    now = time.time()
-    for path in globmod.glob(os.path.join(parent, "mpy-review-*")):
-        try:
-            if os.path.isdir(path) and (now - os.path.getmtime(path)) > _STALE_TMPDIR_AGE:
-                shutil.rmtree(path, ignore_errors=True)
-        except OSError:
-            pass
-
-
-def _make_review_tmpdir() -> str:
-    """Create a temp directory for review example files.
-
-    Uses MPY_REVIEW_TMPDIR as the parent if set (shared volume in Docker),
-    otherwise falls back to the system default.
-    """
-    base = os.environ.get("MPY_REVIEW_TMPDIR")
-    return tempfile.mkdtemp(prefix="mpy-review-", dir=base)
-
-
-@mcp.tool()
-def review_diff(
-    diff_text: str,
-    top_k: int = 8,
-    include_codebase: bool = False,
-    commit_messages: list[str] | None = None,
-    pr_title: str | None = None,
-    pr_body: str | None = None,
-) -> str:
-    """Review a code diff using historical MicroPython review patterns.
-
-    Primary entry point for code review. Accepts raw unified diff text,
-    retrieves relevant past review examples, writes each example to a
-    temp file, and returns a compact orchestration prompt with file paths.
-
-    The calling agent already has the diff in context so it is not echoed
-    back. Example files contain full diff_hunks and thread context with
-    no truncation.
-
-    Args:
-        diff_text: Unified diff text to review.
-        top_k: Number of review examples to retrieve (default 8).
-        include_codebase: Include MicroPython codebase context (slower).
-        commit_messages: Optional list of commit messages for context.
-        pr_title: Optional PR title for context.
-        pr_body: Optional PR description/body for context.
-
-    Returns:
-        Markdown orchestration prompt (~5-8K chars) with a summary table
-        of temp files, the style guide, and workflow instructions.
-    """
-    _touch_activity()
-    _cleanup_stale_review_tmpdirs()
-    t0 = time.monotonic()
-    logger.info("review_diff: starting (top_k=%d, include_codebase=%s, diff_len=%d)",
-                top_k, include_codebase, len(diff_text))
-
-    retriever = _get_retriever()
-    builder = _get_builder()
-    logger.info("review_diff: retriever/builder ready (%.1fs)", time.monotonic() - t0)
-
-    files_changed = _extract_files_from_diff(diff_text)
-    logger.info("review_diff: %d files in diff (%.1fs)", len(files_changed), time.monotonic() - t0)
-
-    results = retriever.get_similar_reviews(
-        diff_text, top_k=top_k, diff_files=files_changed,
-    )
-    logger.info("review_diff: retrieval returned %d results (%.1fs)",
-                len(results), time.monotonic() - t0)
-
-    codebase_context = None
-    if include_codebase:
-        try:
-            from rag.codebase import get_codebase_retriever
-            codebase_context = get_codebase_retriever().get_context_for_diff(
-                diff_text, top_k=5,
-            )
-            logger.info("review_diff: codebase context loaded (%.1fs)", time.monotonic() - t0)
-        except Exception as e:
-            logger.warning(f"review_diff: codebase context failed (%.1fs): {e}",
-                           time.monotonic() - t0)
-
-    temp_dir = _make_review_tmpdir()
-    _temp_dir, file_infos = builder.write_example_files(results, temp_dir=temp_dir)
-    logger.info("review_diff: wrote %d example files to %s (%.1fs)",
-                len(file_infos), temp_dir, time.monotonic() - t0)
-
-    prompt = builder.build_orchestration_prompt(
-        file_infos=file_infos,
-        files_changed=files_changed,
-        commit_messages=commit_messages,
-        pr_title=pr_title,
-        pr_body=pr_body,
-        codebase_context=codebase_context,
-    )
-
-    logger.info("review_diff: complete (%.1fs)", time.monotonic() - t0)
-    return prompt
-
-
-@mcp.tool()
-def review_pr(
-    pr_number: int,
-    repo: str = "micropython/micropython",
-    top_k: int = 8,
-    include_codebase: bool = False,
-    pr_title: str | None = None,
-    pr_body: str | None = None,
-    commit_messages: list[str] | None = None,
-) -> str:
-    """Review a GitHub PR by number using historical MicroPython review patterns.
-
-    Fetches the PR diff via gh CLI, then retrieves relevant past review
-    examples and writes them to temp files.
-
-    Args:
-        pr_number: GitHub PR number.
-        repo: GitHub repository slug (default: micropython/micropython).
-        top_k: Number of review examples to retrieve (default 8).
-        include_codebase: Include MicroPython codebase context (slower).
-        pr_title: Optional PR title (skips gh metadata fetch if provided with pr_body).
-        pr_body: Optional PR body/description.
-        commit_messages: Optional list of commit messages.
-
-    Returns:
-        Markdown orchestration prompt with file paths and style guide.
-    """
-    _touch_activity()
-    _cleanup_stale_review_tmpdirs()
-    t0 = time.monotonic()
-    logger.info("review_pr: starting PR #%d (top_k=%d, include_codebase=%s)",
-                pr_number, top_k, include_codebase)
-
-    result = subprocess.run(
-        ["gh", "pr", "diff", str(pr_number), "--repo", repo],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        logger.error("review_pr: gh pr diff failed: %s", result.stderr.strip())
-        return json.dumps({"error": f"Failed to fetch PR diff: {result.stderr.strip()}"})
-
-    diff_text = result.stdout
-    if not diff_text.strip():
-        return json.dumps({"error": f"PR #{pr_number} has an empty diff"})
-
-    logger.info("review_pr: fetched diff (%d chars, %.1fs)",
-                len(diff_text), time.monotonic() - t0)
-
-    # Fetch PR metadata if not already provided by the caller
-    if pr_title is None or pr_body is None or commit_messages is None:
-        try:
-            meta_result = subprocess.run(
-                ["gh", "pr", "view", str(pr_number), "--repo", repo,
-                 "--json", "title,body,commits"],
-                capture_output=True, text=True,
-            )
-            if meta_result.returncode == 0:
-                meta = json.loads(meta_result.stdout)
-                if pr_title is None:
-                    pr_title = meta.get("title")
-                if pr_body is None:
-                    pr_body = meta.get("body")
-                if commit_messages is None:
-                    commits = meta.get("commits", [])
-                    if commits:
-                        commit_messages = [
-                            c.get("messageHeadline", "") for c in commits
-                            if c.get("messageHeadline")
-                        ]
-                logger.info("review_pr: fetched metadata (%.1fs)", time.monotonic() - t0)
-        except Exception as e:
-            logger.warning("review_pr: metadata fetch failed: %s", e)
-
-    retriever = _get_retriever()
-    builder = _get_builder()
-    logger.info("review_pr: retriever/builder ready (%.1fs)", time.monotonic() - t0)
-
-    files_changed = _extract_files_from_diff(diff_text)
-    logger.info("review_pr: %d files in diff (%.1fs)", len(files_changed), time.monotonic() - t0)
-
-    results = retriever.get_similar_reviews(
-        diff_text, top_k=top_k, diff_files=files_changed,
-    )
-    logger.info("review_pr: retrieval returned %d results (%.1fs)",
-                len(results), time.monotonic() - t0)
-
-    codebase_context = None
-    if include_codebase:
-        try:
-            from rag.codebase import get_codebase_retriever
-            codebase_context = get_codebase_retriever().get_context_for_diff(
-                diff_text, top_k=5,
-            )
-            logger.info("review_pr: codebase context loaded (%.1fs)", time.monotonic() - t0)
-        except Exception as e:
-            logger.warning("review_pr: codebase context failed (%.1fs): %s",
-                           time.monotonic() - t0, e)
-
-    temp_dir = _make_review_tmpdir()
-    _temp_dir, file_infos = builder.write_example_files(results, temp_dir=temp_dir)
-    logger.info("review_pr: wrote %d example files to %s (%.1fs)",
-                len(file_infos), temp_dir, time.monotonic() - t0)
-
-    prompt = builder.build_orchestration_prompt(
-        file_infos=file_infos,
-        files_changed=files_changed,
-        pr_number=pr_number,
-        pr_title=pr_title,
-        pr_body=pr_body,
-        commit_messages=commit_messages,
-        codebase_context=codebase_context,
-    )
-
-    logger.info("review_pr: complete (%.1fs)", time.monotonic() - t0)
-    return prompt
-
-
-@mcp.tool()
-def search_reviews(
-    query: str,
-    top_k: int = 10,
-    domain: str | None = None,
-    severity: str | None = None,
-    component: str | None = None,
-    language_context: str | None = None,
-) -> dict:
-    """Search review comments by semantic similarity with optional filters.
-
-    Use for targeted follow-up queries during a review session. For example,
-    after reviewing a diff, search for "memory allocation gc" to find specific
-    patterns flagged around garbage collection.
-
-    Filterable domains: correctness, code_style, api_design, memory, performance,
-    portability, documentation, testing, security, architecture, build_system.
-
-    Filterable severities: blocking, suggestion, nitpick.
-
-    Filterable components: py_core, extmod, port_specific, drivers, tools, tests,
-    docs, build_system.
-
-    Args:
-        query: Natural language search query.
-        top_k: Number of results (default 10).
-        domain: Filter by review domain.
-        severity: Filter by severity level.
-        component: Filter by codebase component.
-        language_context: Filter by language (c_code, python_code, etc.).
-
-    Returns:
-        Dict with 'results' list and 'count'.
-    """
-    _touch_activity()
-    retriever = _get_retriever()
-    results = retriever.search_with_filters(
-        query,
-        domain=domain,
-        severity=severity,
-        component=component,
-        language_context=language_context,
-        top_k=top_k,
-    )
-
-    return {
-        "results": _serialize_results(results),
-        "count": len(results),
-        "query": query,
-        "filters": {
-            k: v for k, v in {
-                "domain": domain,
-                "severity": severity,
-                "component": component,
-                "language_context": language_context,
-            }.items() if v is not None
-        },
-    }
-
-
-@mcp.tool()
-def find_style_examples(
-    query: str = "",
-    top_k: int = 10,
-) -> dict:
-    """Find review comments that exemplify the lead maintainer's communication style.
-
-    Filtered to comments marked as style examples during categorization.
-    Use to calibrate tone and phrasing when generating reviews.
-
-    Args:
-        query: Optional search query to focus style examples (default: broad).
-        top_k: Number of results (default 10).
-
-    Returns:
-        Dict with 'results' list and 'count'.
-    """
-    _touch_activity()
-    retriever = _get_retriever()
-
-    if query:
-        results = retriever.search_with_filters(
-            query, is_style_example=True, top_k=top_k,
-        )
-    else:
-        # Broad style example retrieval — use a generic query
-        results = retriever.search_with_filters(
-            "code review feedback suggestion", is_style_example=True, top_k=top_k,
-        )
-
-    return {
-        "results": _serialize_results(results),
-        "count": len(results),
-    }
-
-
-@mcp.tool()
-def get_review_stats() -> dict:
-    """Get statistics about the review database index.
-
-    Returns record count, domain distribution, and other index metadata.
-    Use to verify the system is operational.
-
-    Returns:
-        Dict with index statistics.
-    """
-    _touch_activity()
-    from rag.indexer import index_stats
-    return index_stats()
-
-
-@mcp.tool()
-def get_pr_review_history(
-    pr_number: int,
-    repo: str = "micropython/micropython",
-    max_comments: int = 20,
-) -> dict:
-    """Get full review history for a specific PR.
-
-    Retrieves all review comments, issue comments, and review verdicts
-    for a PR, organized as conversation threads where possible.
-
-    Args:
-        pr_number: GitHub PR number.
-        repo: GitHub repository slug (default: micropython/micropython).
-        max_comments: Maximum comments to return (default 20).
-
-    Returns:
-        Dict with 'threads' (grouped by reply chain), 'pr_info', and 'comment_count'.
-    """
-    _touch_activity()
-    from rag.graph_expander import get_pr_review_context
-    return get_pr_review_context(pr_number, max_comments=max_comments, repo=repo)
-
-
-@mcp.tool()
-async def verify_findings(
-    findings: list[dict],
-    diff_text: str,
-    pr_number: int | None = None,
-    repo: str = "micropython/micropython",
-) -> str:
-    """Cross-check review findings against the actual codebase.
-
-    Each finding is verified independently by a dedicated claude -p subprocess
-    with access to codanna, the filesystem, gh CLI, and historical review
-    precedent from the RAG database.
-
-    Call this after generating structured findings from a review_diff/review_pr
-    session. Findings that are false positives (e.g. pattern matches existing
-    convention) are flagged so the caller can drop or adjust them.
-
-    Args:
-        findings: JSON array of structured findings. Each must have:
-            file (str), line (int), severity (str), description (str),
-            diff_hunk (str).
-        diff_text: The full unified diff being reviewed.
-        pr_number: Optional PR number for GitHub context.
-        repo: Repository slug (default: micropython/micropython).
-
-    Returns:
-        Markdown orchestration prompt with verdict summary table and
-        paths to per-finding verdict files under /tmp/mpy-verify-*/.
-    """
-    _touch_activity()
-    t0 = time.monotonic()
-    logger.info(
-        "verify_findings: starting (%d findings, pr=%s)",
-        len(findings), pr_number,
-    )
-
-    from rag.verifier import REQUIRED_FINDING_FIELDS, MAX_FINDINGS, verify_all_findings
-
-    # Validate findings count
-    if len(findings) > MAX_FINDINGS:
-        return (
-            f"Error: too many findings ({len(findings)}). "
-            f"Maximum is {MAX_FINDINGS}. Prioritize the most important findings."
-        )
-
-    # Validate finding fields
-    for i, f in enumerate(findings):
-        missing = [k for k in REQUIRED_FINDING_FIELDS if k not in f]
-        if missing:
-            return (
-                f"Error: finding #{i} is missing required fields: {', '.join(missing)}. "
-                f"Each finding must have: {', '.join(REQUIRED_FINDING_FIELDS)}"
-            )
-
-    retriever = _get_retriever()
-
-    # Determine cwd (MicroPython checkout)
-    # CLAUDE_PROJECT_DIR is set by Claude Code to the user's project directory
-    cwd = (
-        os.environ.get("MPY_CHECKOUT")
-        or os.environ.get("CLAUDE_PROJECT_DIR")
-        or "/workspace/micropython"
-    )
-
-    # Build env
-    env = os.environ.copy()
-    config_dir = os.environ.get("MPY_REVIEWER_CLAUDE_CONFIG_DIR")
-    if config_dir:
-        env["CLAUDE_CONFIG_DIR"] = config_dir
-
-    prompt, file_infos = await verify_all_findings(
-        findings=findings,
-        diff_text=diff_text,
-        pr_number=pr_number,
-        repo=repo,
-        retriever=retriever,
-        cwd=cwd,
-        env=env,
-    )
-
-    logger.info(
-        "verify_findings: complete (%d verdicts, %.1fs)",
-        len(file_infos), time.monotonic() - t0,
-    )
-    return prompt
 
 
 # --- Issue triage tools ---
@@ -771,9 +288,8 @@ def _fetch_github_issue(issue_number: int, repo: str) -> dict | None:
 
 
 if __name__ == "__main__":
-    # Bot review-posting tools live in bot.mcp_tools. Registered only for
-    # the standalone deployment entry point. Plugin/library imports get the
-    # base mcp object without review-posting tools.
+    # Bot tools live in bot.mcp_tools. Registered only for the standalone
+    # deployment entry point.
     try:
         from bot.mcp_tools import register_bot_tools
         register_bot_tools(mcp)
