@@ -146,8 +146,8 @@ def _get_prompts_dir() -> Path:
         if p.is_dir():
             return p
 
-    # Canonical plugin location
-    canonical = Path.home() / ".claude" / "mpy-rules"
+    # Canonical plugin location (setup-rules.sh copies prompts here)
+    canonical = Path.home() / ".claude" / "mpy-rules" / "prompts"
     if canonical.is_dir():
         return canonical
 
@@ -164,7 +164,7 @@ def _get_rules_dir() -> Path:
     submodule = repo_root / "mpy-rules-repo" / "plugins" / "mpy-rules" / "rules"
     if submodule.is_dir():
         return submodule
-    canonical = Path.home() / ".claude" / "mpy-rules"
+    canonical = Path.home() / ".claude" / "mpy-rules" / "rules"
     if canonical.is_dir():
         return canonical
     return _get_prompts_dir().parent / "rules"
@@ -195,7 +195,6 @@ def _load_prompt_file(path: Path) -> str:
 
 async def _run_domain_agent(
     dimension: str,
-    prompt_file: str,
     system_prompt: str,
     user_message: str,
     env: dict,
@@ -360,8 +359,11 @@ async def _post_review_via_cli(
         cmd.extend(["--head-sha", head_sha])
     if diff_path:
         cmd.extend(["--diff", diff_path])
+    # Always use --token-file to avoid exposing tokens in /proc/PID/cmdline.
+    token_tmp = None
     if token:
-        cmd.extend(["--token", token])
+        token_tmp = _write_temp_file(token, prefix="gh-token-", suffix=".txt")
+        cmd.extend(["--token-file", token_tmp])
     else:
         token_file = os.environ.get("GITHUB_TOKEN_FILE")
         if token_file:
@@ -390,6 +392,12 @@ async def _post_review_via_cli(
         return {"error": "post-review.py timed out"}
     except Exception as e:
         return {"error": f"post-review.py error: {e}"}
+    finally:
+        if token_tmp:
+            try:
+                os.unlink(token_tmp)
+            except OSError:
+                pass
 
 
 async def run_review(
@@ -397,10 +405,11 @@ async def run_review(
 ) -> bool:
     """Execute a full review cycle for a PR.
 
-    1. Update MicroPython checkout to PR head
-    2. Build system prompt and user message
-    3. Spawn claude -p with MCP config
-    4. Wait for completion (with timeout)
+    1. Fetch PR metadata and diff
+    2. Update MicroPython checkout to PR head
+    3. Load prompt files and spawn domain agents in parallel
+    4. Validate and consolidate findings
+    5. Post review via post-review.py CLI
 
     Args:
         request: The review request from the queue.
@@ -488,7 +497,7 @@ async def run_review(
 
     try:
         return await _run_multi_agent_review(
-            request, config, token, diff_text, pr_title, pr_body, head_sha,
+            request, config, token, head_sha,
             shared_context, dev_patterns, validation_prompt, prompts_dir,
             user_msg, diff_path,
         )
@@ -503,9 +512,6 @@ async def _run_multi_agent_review(
     request: ReviewRequest,
     config: BotConfig,
     token: str | None,
-    diff_text: str,
-    pr_title: str,
-    pr_body: str,
     head_sha: str,
     shared_context: str,
     dev_patterns: str,
@@ -542,7 +548,7 @@ async def _run_multi_agent_review(
                 f"{user_msg}"
             )
             return await _run_domain_agent(
-                dimension, prompt_file, system, user, env, mpy_checkout,
+                dimension, system, user, env, mpy_checkout,
             )
 
     coros = [
@@ -629,10 +635,11 @@ async def _run_multi_agent_review(
     if agents_succeeded < len(DOMAIN_AGENTS):
         summary += f" ({agents_succeeded}/{len(DOMAIN_AGENTS)} review dimensions completed.)"
 
-    # --- Phase 3: Post review ---
+    # --- Phase 3: Post review (exclude INVALID findings) ---
+    active_findings = [f for f in validated_findings if f.get("status") != "INVALID"]
     post_payload = {
         "summary": summary,
-        "findings": validated_findings,
+        "findings": active_findings,
     }
 
     post_result = await _post_review_via_cli(
@@ -848,9 +855,7 @@ def _parse_validation_output(
     if not validation_text.strip():
         # Validation agent failed -- treat all findings as unvalidated KEEP
         logger.warning("Empty validation output, treating all findings as KEEP")
-        for f in original_findings:
-            f["status"] = "KEEP"
-        return original_findings
+        return [dict(f, status="KEEP") for f in original_findings]
 
     # Try to match each finding from the original list to a verdict in the output
     validated = []
