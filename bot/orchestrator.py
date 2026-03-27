@@ -282,7 +282,6 @@ async def _run_domain_agent(
 
 
 async def _run_validation_agent(
-    all_findings: list[dict],
     system_prompt: str,
     user_message: str,
     env: dict,
@@ -487,6 +486,35 @@ async def run_review(
     # Write diff to temp file for agent file reads
     diff_path = _write_temp_file(annotated_diff, prefix="mpy-diff-", suffix=".patch")
 
+    try:
+        return await _run_multi_agent_review(
+            request, config, token, diff_text, pr_title, pr_body, head_sha,
+            shared_context, dev_patterns, validation_prompt, prompts_dir,
+            user_msg, diff_path,
+        )
+    finally:
+        try:
+            os.unlink(diff_path)
+        except OSError:
+            pass
+
+
+async def _run_multi_agent_review(
+    request: ReviewRequest,
+    config: BotConfig,
+    token: str | None,
+    diff_text: str,
+    pr_title: str,
+    pr_body: str,
+    head_sha: str,
+    shared_context: str,
+    dev_patterns: str,
+    validation_prompt: str,
+    prompts_dir: Path,
+    user_msg: str,
+    diff_path: str,
+) -> bool:
+    """Run the multi-agent review pipeline and post results."""
     # Set up environment for all agents
     env = os.environ.copy()
     if config.auth.claude_oauth_path:
@@ -531,8 +559,7 @@ async def run_review(
             logger.error("Domain agent %s raised: %s", dim_name, result)
         elif isinstance(result, list):
             all_findings.extend(result)
-            if result:
-                agents_succeeded += 1
+            agents_succeeded += 1
         else:
             agents_succeeded += 1
 
@@ -568,7 +595,7 @@ async def run_review(
     )
 
     validation_output = await _run_validation_agent(
-        all_findings, validation_system, validation_user, env, mpy_checkout,
+        validation_system, validation_user, env, mpy_checkout,
     )
 
     # Parse validation output to extract KEEP/QUESTIONABLE findings
@@ -584,7 +611,6 @@ async def run_review(
     )
 
     # Build summary
-    keep_count = sum(1 for f in validated_findings if f.get("status") in ("KEEP", "QUESTIONABLE"))
     blocking = sum(1 for f in validated_findings
                    if f.get("status") in ("KEEP", "QUESTIONABLE") and f.get("severity") == "blocking")
     suggestion = sum(1 for f in validated_findings
@@ -626,12 +652,6 @@ async def run_review(
         "Review posted for PR #%d: review_id=%s, %d comments",
         request.pr_number, post_result.get("review_id"), post_result.get("comment_count", 0),
     )
-
-    # Clean up temp diff file
-    try:
-        os.unlink(diff_path)
-    except OSError:
-        pass
 
     return True
 
@@ -834,15 +854,14 @@ def _parse_validation_output(
 
     # Try to match each finding from the original list to a verdict in the output
     validated = []
-    text_lower = validation_text.lower()
 
     for f in original_findings:
         title = f.get("title", "")
         file_ref = f.get("file", "")
 
         # Search for this finding in the validation output
-        # Look for the title near a verdict marker
-        status = "KEEP"  # default if not found
+        # Default to KEEP if not found (fail-open, but logged)
+        status = "KEEP"
 
         # Find the position of this finding's title in the validation text
         title_pos = validation_text.find(title)
@@ -866,6 +885,12 @@ def _parse_validation_output(
                     status = "QUESTIONABLE"
                 else:
                     status = "KEEP"
+
+        if title_pos < 0:
+            logger.warning(
+                "Validation output missing finding: %s (%s), defaulting to KEEP",
+                title[:50], file_ref,
+            )
 
         finding = dict(f)
         finding["status"] = status
