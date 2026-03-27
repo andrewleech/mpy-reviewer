@@ -1,0 +1,3 @@
+[submodule "mpy-rules-repo"]
+	path = mpy-rules-repo
+	url = git@github.com:andrewleech/claude-mpy-marketplace.git

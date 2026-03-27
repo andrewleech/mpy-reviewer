@@ -135,7 +135,7 @@ def _get_prompts_dir() -> Path:
     """
     # Submodule path relative to this repo
     repo_root = Path(__file__).parent.parent
-    submodule = repo_root / "mpy-rules" / "prompts"
+    submodule = repo_root / "mpy-rules-repo" / "plugins" / "mpy-rules" / "prompts"
     if submodule.is_dir():
         return submodule
 
@@ -161,7 +161,7 @@ def _get_prompts_dir() -> Path:
 def _get_rules_dir() -> Path:
     """Return the path to rules files (development-patterns.md etc.)."""
     repo_root = Path(__file__).parent.parent
-    submodule = repo_root / "mpy-rules" / "rules"
+    submodule = repo_root / "mpy-rules-repo" / "plugins" / "mpy-rules" / "rules"
     if submodule.is_dir():
         return submodule
     canonical = Path.home() / ".claude" / "mpy-rules"
@@ -173,7 +173,7 @@ def _get_rules_dir() -> Path:
 def _get_post_review_script() -> Path:
     """Return the path to the post-review.py CLI script."""
     repo_root = Path(__file__).parent.parent
-    submodule = repo_root / "mpy-rules" / "scripts" / "post-review.py"
+    submodule = repo_root / "mpy-rules-repo" / "plugins" / "mpy-rules" / "scripts" / "post-review.py"
     if submodule.is_file():
         return submodule
     env_path = os.environ.get("MPY_POST_REVIEW_SCRIPT")
