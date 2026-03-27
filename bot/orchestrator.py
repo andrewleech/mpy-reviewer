@@ -1,7 +1,8 @@
-"""Review orchestration — spawns claude -p per review.
+"""Review orchestration -- multi-agent review pipeline.
 
-Handles git checkout updates, MCP config generation, subprocess management,
-and timeout enforcement.
+Spawns 4 parallel domain review agents (sonnet) and 1 validation agent (opus)
+as claude -p subprocesses. Posts results via post-review.py CLI.
+No MCP server dependency for the review pipeline.
 """
 
 import asyncio
@@ -10,19 +11,63 @@ import json
 import logging
 import os
 import re
+import subprocess
 import tempfile
 import urllib.error
+from pathlib import Path
 
 from bot.config import BotConfig
 from bot.github_api import github_request
 from bot.github_app import GitHubAppAuth
-from bot.prompt import build_system_prompt, build_user_message
+from bot.prompt import annotate_diff, build_user_message
 from bot.review_queue import ReviewRequest
 
 logger = logging.getLogger(__name__)
 
 MAX_DIFF_CHARS = 1_000_000
 _CHECKOUT_LOCK = os.path.join(tempfile.gettempdir(), "mpy-checkout.lock")
+
+# Multi-agent review configuration
+DOMAIN_MODEL = "sonnet"
+VALIDATION_MODEL = "opus"
+MAX_PARALLEL_AGENTS = 4
+AGENT_TIMEOUT = 300  # Per-agent timeout in seconds
+AGENT_BUDGET = "1.00"  # Max budget per domain agent
+
+DOMAIN_AGENTS = [
+    ("correctness-safety", "correctness-safety.md"),
+    ("resource-constraints", "resource-constraints.md"),
+    ("api-portability", "api-portability.md"),
+    ("conventions-completeness", "conventions-completeness.md"),
+]
+
+# JSON schema for domain agent findings output
+FINDINGS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "file": {"type": "string"},
+                    "line": {"type": "integer"},
+                    "side": {"type": "string", "enum": ["RIGHT", "LEFT"]},
+                    "severity": {"type": "string", "enum": ["blocking", "suggestion", "nitpick"]},
+                    "dimension": {"type": "string"},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "recommendation": {"type": "string"},
+                    "diff_hunk": {"type": "string"},
+                    "commit": {"type": "string"},
+                },
+                "required": ["file", "line", "severity", "title", "description"],
+            },
+        },
+        "summary": {"type": "string"},
+    },
+    "required": ["findings"],
+}
 
 
 def _get_mpy_checkout() -> str:
@@ -81,6 +126,271 @@ class DiffFetchError(ReviewError):
     """Raised when the PR diff cannot be fetched from GitHub."""
 
     user_message = "Could not fetch PR diff from GitHub. Retry with `/review`."
+
+
+def _get_prompts_dir() -> Path:
+    """Return the path to review prompt files.
+
+    Looks for mpy-rules submodule first, then falls back to env var.
+    """
+    # Submodule path relative to this repo
+    repo_root = Path(__file__).parent.parent
+    submodule = repo_root / "mpy-rules" / "prompts"
+    if submodule.is_dir():
+        return submodule
+
+    # Env var override
+    env_path = os.environ.get("MPY_REVIEW_PROMPTS_DIR")
+    if env_path:
+        p = Path(env_path)
+        if p.is_dir():
+            return p
+
+    # Canonical plugin location
+    canonical = Path.home() / ".claude" / "mpy-rules"
+    if canonical.is_dir():
+        return canonical
+
+    raise ReviewError(
+        "Cannot find review prompt files. Set MPY_REVIEW_PROMPTS_DIR or "
+        "initialize the mpy-rules submodule.",
+        user_message="Review system misconfigured -- prompt files not found.",
+    )
+
+
+def _get_rules_dir() -> Path:
+    """Return the path to rules files (development-patterns.md etc.)."""
+    repo_root = Path(__file__).parent.parent
+    submodule = repo_root / "mpy-rules" / "rules"
+    if submodule.is_dir():
+        return submodule
+    canonical = Path.home() / ".claude" / "mpy-rules"
+    if canonical.is_dir():
+        return canonical
+    return _get_prompts_dir().parent / "rules"
+
+
+def _get_post_review_script() -> Path:
+    """Return the path to the post-review.py CLI script."""
+    repo_root = Path(__file__).parent.parent
+    submodule = repo_root / "mpy-rules" / "scripts" / "post-review.py"
+    if submodule.is_file():
+        return submodule
+    env_path = os.environ.get("MPY_POST_REVIEW_SCRIPT")
+    if env_path:
+        return Path(env_path)
+    raise ReviewError(
+        "Cannot find post-review.py script.",
+        user_message="Review system misconfigured -- post-review script not found.",
+    )
+
+
+def _load_prompt_file(path: Path) -> str:
+    """Read a prompt file, raising ReviewError if missing."""
+    try:
+        return path.read_text()
+    except FileNotFoundError:
+        raise ReviewError(f"Missing prompt file: {path}")
+
+
+async def _run_domain_agent(
+    dimension: str,
+    prompt_file: str,
+    system_prompt: str,
+    user_message: str,
+    env: dict,
+    cwd: str,
+    timeout: int = AGENT_TIMEOUT,
+) -> list[dict]:
+    """Spawn a single domain review agent as a claude -p subprocess.
+
+    Returns a list of finding dicts. On failure, returns empty list.
+    """
+    cmd = [
+        "claude", "-p",
+        "--model", DOMAIN_MODEL,
+        "--output-format", "json",
+        "--json-schema", json.dumps(FINDINGS_SCHEMA),
+        "--dangerously-skip-permissions",
+        "--system-prompt", system_prompt,
+        "--allowedTools", "Read,Glob,Grep",
+        "--max-budget-usd", AGENT_BUDGET,
+    ]
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            cwd=cwd,
+        )
+
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=user_message.encode()),
+            timeout=timeout,
+        )
+
+        if proc.returncode != 0:
+            logger.error(
+                "Domain agent %s failed (rc=%d): %s",
+                dimension, proc.returncode, stderr.decode(errors="replace")[:500],
+            )
+            return []
+
+        # Parse structured JSON output
+        try:
+            output = json.loads(stdout.decode())
+        except json.JSONDecodeError:
+            logger.error("Bad JSON from domain agent %s", dimension)
+            return []
+
+        # Extract findings from structured_output wrapper
+        structured = output
+        if isinstance(output, dict) and "structured_output" in output:
+            structured = output["structured_output"]
+
+        findings = []
+        if isinstance(structured, dict):
+            findings = structured.get("findings", [])
+        elif isinstance(structured, list):
+            findings = structured
+
+        # Tag each finding with its dimension
+        for f in findings:
+            if isinstance(f, dict):
+                f.setdefault("dimension", dimension)
+
+        logger.info("Domain agent %s returned %d findings", dimension, len(findings))
+        return findings
+
+    except asyncio.TimeoutError:
+        logger.error("Domain agent %s timed out after %ds", dimension, timeout)
+        try:
+            proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        return []
+    except Exception as e:
+        logger.error("Domain agent %s error: %s", dimension, e)
+        return []
+
+
+async def _run_validation_agent(
+    all_findings: list[dict],
+    system_prompt: str,
+    user_message: str,
+    env: dict,
+    cwd: str,
+    timeout: int = AGENT_TIMEOUT * 2,
+) -> str:
+    """Spawn the validation agent. Returns raw text output."""
+    cmd = [
+        "claude", "-p",
+        "--model", VALIDATION_MODEL,
+        "--output-format", "text",
+        "--dangerously-skip-permissions",
+        "--system-prompt", system_prompt,
+        "--allowedTools", "Read,Glob,Grep",
+        "--max-budget-usd", "2.00",
+    ]
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            cwd=cwd,
+        )
+
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=user_message.encode()),
+            timeout=timeout,
+        )
+
+        if proc.returncode != 0:
+            logger.error(
+                "Validation agent failed (rc=%d): %s",
+                proc.returncode, stderr.decode(errors="replace")[:500],
+            )
+            return ""
+
+        return stdout.decode(errors="replace")
+
+    except asyncio.TimeoutError:
+        logger.error("Validation agent timed out after %ds", timeout)
+        try:
+            proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        return ""
+    except Exception as e:
+        logger.error("Validation agent error: %s", e)
+        return ""
+
+
+async def _post_review_via_cli(
+    findings_json: dict,
+    repo_owner: str,
+    repo_name: str,
+    pr_number: int,
+    head_sha: str,
+    diff_path: str | None = None,
+    token: str | None = None,
+) -> dict:
+    """Post review via post-review.py CLI script."""
+    script = _get_post_review_script()
+
+    cmd = [
+        "python3", str(script),
+        "--repo", f"{repo_owner}/{repo_name}",
+        "--pr", str(pr_number),
+    ]
+    if head_sha:
+        cmd.extend(["--head-sha", head_sha])
+    if diff_path:
+        cmd.extend(["--diff", diff_path])
+    if token:
+        cmd.extend(["--token", token])
+    else:
+        token_file = os.environ.get("GITHUB_TOKEN_FILE")
+        if token_file:
+            cmd.extend(["--token-file", token_file])
+
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            cmd,
+            input=json.dumps(findings_json),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        if result.returncode != 0:
+            logger.error("post-review.py failed (rc=%d): %s",
+                         result.returncode, result.stderr[:500])
+            try:
+                return json.loads(result.stdout)
+            except json.JSONDecodeError:
+                return {"error": f"post-review.py failed (rc={result.returncode})"}
+
+        return json.loads(result.stdout)
+    except subprocess.TimeoutExpired:
+        return {"error": "post-review.py timed out"}
+    except Exception as e:
+        return {"error": f"post-review.py error: {e}"}
 
 
 async def run_review(
@@ -153,15 +463,18 @@ async def run_review(
     if not checkout_ok:
         logger.error("Checkout failed for PR #%d, proceeding with current HEAD", request.pr_number)
 
-    # Build prompts
-    system_prompt = build_system_prompt(
-        additional_system_prompt=config.prompt.additional_system_prompt,
-        top_k=config.review.top_k,
-        include_codebase=config.review.include_codebase,
-        check_ci=config.review.check_ci,
-    )
+    # Load prompt files
+    prompts_dir = _get_prompts_dir()
+    rules_dir = _get_rules_dir()
+    shared_context = _load_prompt_file(prompts_dir / "shared-context.md")
+    dev_patterns = _load_prompt_file(rules_dir / "development-patterns.md")
+    validation_prompt = _load_prompt_file(prompts_dir / "finding-validation.md")
 
-    user_message = build_user_message(
+    # Annotate diff with L/R line numbers for agent reference
+    annotated_diff = annotate_diff(diff_text)
+
+    # Build the user message with PR metadata and annotated diff
+    user_msg = build_user_message(
         diff_text=diff_text,
         pr_number=request.pr_number,
         pr_title=pr_title,
@@ -171,114 +484,156 @@ async def run_review(
         head_sha=head_sha,
     )
 
-    # Write temporary MCP config for claude -p
-    mcp_config = _build_mcp_config(config)
-    mcp_config_path = _write_temp_json(mcp_config, prefix="mcp-config-")
+    # Write diff to temp file for agent file reads
+    diff_path = _write_temp_file(annotated_diff, prefix="mpy-diff-", suffix=".patch")
 
-    # System prompt is passed as a CLI argument. It contains review guidelines
-    # and the additional_system_prompt from config — no credentials or tokens.
-    # /proc visibility is mitigated by pid:private in docker-compose.yml.
-    # If running without PID isolation, write to a temp file and pass via
-    # --system-prompt-file (requires Claude CLI support).
-    cmd = [
-        "claude", "-p",
-        "--model", config.review.model,
-        "--output-format", "text",
-        "--dangerously-skip-permissions",
-        "--system-prompt", system_prompt,
-        "--mcp-config", mcp_config_path,
-        "--allowedTools",
-        ",".join([
-            "mcp__mpy-reviewer__review_pr",
-            "mcp__mpy-reviewer__review_diff",
-            "mcp__mpy-reviewer__search_reviews",
-            "mcp__mpy-reviewer__find_style_examples",
-            "mcp__mpy-reviewer__get_review_stats",
-            "mcp__mpy-reviewer__get_pr_review_history",
-            "mcp__mpy-reviewer__verify_findings",
-            "mcp__mpy-reviewer__create_review",
-            "mcp__mpy-reviewer__add_review_comment",
-            "mcp__mpy-reviewer__submit_review",
-            "mcp__mpy-reviewer__get_check_runs",
-            "mcp__mpy-reviewer__get_check_run_annotations",
-            "mcp__mpy-reviewer__get_workflow_run_log",
-            "Read", "Glob", "Grep",
-        ]),
-    ]
-
-    # Set up environment
+    # Set up environment for all agents
     env = os.environ.copy()
     if config.auth.claude_oauth_path:
         env["CLAUDE_CONFIG_DIR"] = config.auth.claude_oauth_path
 
+    mpy_checkout = _get_mpy_checkout()
+
+    # --- Phase 1: Spawn domain agents in parallel ---
     logger.info(
-        "Spawning claude -p for PR #%d (model=%s, timeout=%ds)",
-        request.pr_number, config.review.model, config.review.timeout_seconds,
+        "Spawning %d domain review agents for PR #%d",
+        len(DOMAIN_AGENTS), request.pr_number,
     )
 
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-            cwd=_get_mpy_checkout(),
-        )
+    sem = asyncio.Semaphore(MAX_PARALLEL_AGENTS)
 
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(input=user_message.encode()),
-            timeout=config.review.timeout_seconds,
-        )
-
-        stderr_text = stderr.decode(errors="replace")
-        stdout_text = stdout.decode(errors="replace")
-        if proc.returncode != 0:
-            logger.error(
-                "claude -p failed for PR #%d (rc=%d) stderr: %s",
-                request.pr_number, proc.returncode, stderr_text[:2000],
+    async def _guarded_domain_agent(dimension: str, prompt_file: str) -> list[dict]:
+        async with sem:
+            domain_criteria = _load_prompt_file(prompts_dir / prompt_file)
+            system = shared_context + "\n\n" + dev_patterns
+            user = (
+                f"# Review Dimension: {dimension}\n\n"
+                f"{domain_criteria}\n\n"
+                f"# PR Under Review\n\n"
+                f"Full diff file: {diff_path}\n\n"
+                f"{user_msg}"
             )
-            if stdout_text.strip():
-                logger.error(
-                    "claude -p stdout for PR #%d: %s",
-                    request.pr_number, stdout_text[:2000],
-                )
-            combined = (stderr_text + stdout_text).lower()
-            raise _classify_claude_failure(combined, proc.returncode)
+            return await _run_domain_agent(
+                dimension, prompt_file, system, user, env, mpy_checkout,
+            )
 
-        logger.info(
-            "claude -p completed for PR #%d (rc=%d, stdout=%d bytes, stderr=%d bytes)",
-            request.pr_number, proc.returncode, len(stdout), len(stderr),
+    coros = [
+        _guarded_domain_agent(dim, pfile) for dim, pfile in DOMAIN_AGENTS
+    ]
+    results = await asyncio.gather(*coros, return_exceptions=True)
+
+    # Collect findings from all agents
+    all_findings = []
+    agents_succeeded = 0
+    for i, result in enumerate(results):
+        dim_name = DOMAIN_AGENTS[i][0]
+        if isinstance(result, Exception):
+            logger.error("Domain agent %s raised: %s", dim_name, result)
+        elif isinstance(result, list):
+            all_findings.extend(result)
+            if result:
+                agents_succeeded += 1
+        else:
+            agents_succeeded += 1
+
+    logger.info(
+        "Domain agents: %d/%d succeeded, %d total findings for PR #%d",
+        agents_succeeded, len(DOMAIN_AGENTS), len(all_findings), request.pr_number,
+    )
+
+    if not all_findings:
+        logger.warning("No findings from any domain agent for PR #%d", request.pr_number)
+        # Post a clean review
+        post_result = await _post_review_via_cli(
+            {"summary": "No issues found.", "findings": []},
+            request.repo_owner, request.repo_name, request.pr_number,
+            head_sha, diff_path, token,
         )
-        if stderr_text.strip():
-            logger.info("claude -p stderr for PR #%d:\n%s",
-                        request.pr_number, stderr_text[:3000])
+        logger.info("Posted clean review for PR #%d: %s", request.pr_number, post_result)
         return True
 
-    except asyncio.TimeoutError as exc:
-        logger.error(
-            "claude -p timed out for PR #%d after %ds",
-            request.pr_number, config.review.timeout_seconds,
+    # --- Phase 2: Spawn validation agent ---
+    logger.info(
+        "Spawning validation agent for PR #%d (%d findings to validate)",
+        request.pr_number, len(all_findings),
+    )
+
+    validation_system = shared_context + "\n\n" + dev_patterns + "\n\n" + validation_prompt
+    validation_user = (
+        "# Raw Findings from Review Agents\n\n"
+        f"```json\n{json.dumps(all_findings, indent=2)}\n```\n\n"
+        f"# Review Context\n\n"
+        f"Full diff file: {diff_path}\n\n"
+        f"{user_msg}"
+    )
+
+    validation_output = await _run_validation_agent(
+        all_findings, validation_system, validation_user, env, mpy_checkout,
+    )
+
+    # Parse validation output to extract KEEP/QUESTIONABLE findings
+    # The validation agent returns text with [KEEP], [QUESTIONABLE], [INVALID] markers
+    validated_findings = _parse_validation_output(validation_output, all_findings)
+
+    logger.info(
+        "Validation: %d KEEP, %d QUESTIONABLE, %d INVALID for PR #%d",
+        sum(1 for f in validated_findings if f.get("status") == "KEEP"),
+        sum(1 for f in validated_findings if f.get("status") == "QUESTIONABLE"),
+        sum(1 for f in validated_findings if f.get("status") == "INVALID"),
+        request.pr_number,
+    )
+
+    # Build summary
+    keep_count = sum(1 for f in validated_findings if f.get("status") in ("KEEP", "QUESTIONABLE"))
+    blocking = sum(1 for f in validated_findings
+                   if f.get("status") in ("KEEP", "QUESTIONABLE") and f.get("severity") == "blocking")
+    suggestion = sum(1 for f in validated_findings
+                     if f.get("status") in ("KEEP", "QUESTIONABLE") and f.get("severity") == "suggestion")
+    nitpick = sum(1 for f in validated_findings
+                  if f.get("status") in ("KEEP", "QUESTIONABLE") and f.get("severity") == "nitpick")
+
+    summary_parts = []
+    if blocking:
+        summary_parts.append(f"{blocking} blocking")
+    if suggestion:
+        summary_parts.append(f"{suggestion} suggestion")
+    if nitpick:
+        summary_parts.append(f"{nitpick} nitpick")
+    summary = f"Review of PR #{request.pr_number}: {', '.join(summary_parts) or 'no issues found'}."
+    if agents_succeeded < len(DOMAIN_AGENTS):
+        summary += f" ({agents_succeeded}/{len(DOMAIN_AGENTS)} review dimensions completed.)"
+
+    # --- Phase 3: Post review ---
+    post_payload = {
+        "summary": summary,
+        "findings": validated_findings,
+    }
+
+    post_result = await _post_review_via_cli(
+        post_payload, request.repo_owner, request.repo_name,
+        request.pr_number, head_sha, diff_path, token,
+    )
+
+    if "error" in post_result:
+        logger.error("Failed to post review for PR #%d: %s",
+                      request.pr_number, post_result["error"])
+        raise ReviewError(
+            f"Failed to post review: {post_result['error']}",
+            user_message="Review completed but could not post to GitHub. Retry with `/review`.",
         )
-        try:
-            proc.terminate()
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-        except Exception as e:
-            logger.debug("Subprocess cleanup after timeout: %s", e)
-        raise ReviewTimeoutError(
-            f"claude -p timed out for PR #{request.pr_number} "
-            f"after {config.review.timeout_seconds}s"
-        ) from exc
-    finally:
-        # Clean up temp file
-        try:
-            os.unlink(mcp_config_path)
-        except OSError:
-            pass
+
+    logger.info(
+        "Review posted for PR #%d: review_id=%s, %d comments",
+        request.pr_number, post_result.get("review_id"), post_result.get("comment_count", 0),
+    )
+
+    # Clean up temp diff file
+    try:
+        os.unlink(diff_path)
+    except OSError:
+        pass
+
+    return True
 
 
 _RATE_LIMIT_RE = re.compile(r"rate.?limit|status[:\s]+429|\b429\b.*too many", re.IGNORECASE)
@@ -451,26 +806,80 @@ async def _update_checkout(
     return True
 
 
-def _build_mcp_config(config: BotConfig) -> dict:
-    """Build the MCP client config JSON for claude -p.
-
-    Uses SSE transport to connect to the persistent mcp-server container,
-    keeping the embedding model warm between reviews.
-    """
-    return {
-        "mcpServers": {
-            "mpy-reviewer": {
-                "type": "sse",
-                "url": f"{config.mcp.url}/sse",
-            }
-        }
-    }
-
-
-def _write_temp_json(data: dict, prefix: str = "mcp-") -> str:
-    """Write a dict as JSON to a temp file, return the path."""
-    fd, path = tempfile.mkstemp(prefix=prefix, suffix=".json")
+def _write_temp_file(content: str, prefix: str = "mpy-", suffix: str = ".txt") -> str:
+    """Write text content to a temp file, return the path."""
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix)
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w") as f:
-        json.dump(data, f)
+        f.write(content)
     return path
+
+
+def _parse_validation_output(
+    validation_text: str, original_findings: list[dict],
+) -> list[dict]:
+    """Parse validation agent text output into annotated findings.
+
+    The validation agent returns text with [KEEP], [QUESTIONABLE], [INVALID]
+    markers per finding. This parser extracts the verdict for each finding.
+
+    Falls back to treating all original findings as KEEP if parsing fails.
+    """
+    if not validation_text.strip():
+        # Validation agent failed -- treat all findings as unvalidated KEEP
+        logger.warning("Empty validation output, treating all findings as KEEP")
+        for f in original_findings:
+            f["status"] = "KEEP"
+        return original_findings
+
+    # Try to match each finding from the original list to a verdict in the output
+    validated = []
+    text_lower = validation_text.lower()
+
+    for f in original_findings:
+        title = f.get("title", "")
+        file_ref = f.get("file", "")
+
+        # Search for this finding in the validation output
+        # Look for the title near a verdict marker
+        status = "KEEP"  # default if not found
+
+        # Find the position of this finding's title in the validation text
+        title_pos = validation_text.find(title)
+        if title_pos == -1 and file_ref:
+            # Try finding by file reference
+            title_pos = validation_text.find(file_ref)
+
+        if title_pos >= 0:
+            # Look backwards from the title for the nearest verdict marker
+            preceding = validation_text[:title_pos].upper()
+            # Find the last verdict marker before this title
+            keep_pos = preceding.rfind("[KEEP]")
+            quest_pos = preceding.rfind("[QUESTIONABLE]")
+            invalid_pos = preceding.rfind("[INVALID]")
+
+            latest = max(keep_pos, quest_pos, invalid_pos)
+            if latest >= 0:
+                if latest == invalid_pos:
+                    status = "INVALID"
+                elif latest == quest_pos:
+                    status = "QUESTIONABLE"
+                else:
+                    status = "KEEP"
+
+        finding = dict(f)
+        finding["status"] = status
+
+        # Extract validation note if present
+        if title_pos >= 0:
+            after_title = validation_text[title_pos:]
+            note_match = re.search(
+                r"[Vv]alidation note:\s*(.+?)(?:\n\n|\n\[|$)",
+                after_title, re.DOTALL,
+            )
+            if note_match:
+                finding["validation_note"] = note_match.group(1).strip()
+
+        validated.append(finding)
+
+    return validated
